@@ -476,6 +476,7 @@ function browserHost(): StudioHost {
     },
     openExternal: async (url) => void window.open(url, "_blank"),
     setRecording: async () => undefined,
+    findMacroDownload: async () => null,
     onCommand: () => () => undefined,
   };
 }

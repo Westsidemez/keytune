@@ -64,6 +64,8 @@ export interface StudioHost {
   /** Ask Chromium for HID devices with a user gesture; returns once permission is granted. */
   scanDevices(): Promise<void>;
   openExternal(url: string): Promise<void>;
+  /** The newest macro export (e.g. "Keychron V5 Max Macro.json") in Downloads from the last 30 days. */
+  findMacroDownload(): Promise<{ name: string; modified: number; data: unknown } | null>;
   /** While recording a macro, stop menu shortcuts (⌘Q, ⌘W…) from firing. */
   setRecording(on: boolean): Promise<void>;
   onCommand(listener: (command: string) => void): () => void;

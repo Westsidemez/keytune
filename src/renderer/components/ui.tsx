@@ -95,6 +95,52 @@ export const ICONS = {
       <path d="M12 5v4" />
     </>
   ),
+  keyTap: (
+    <>
+      <rect x="3" y="9" width="18" height="11" rx="2.5" />
+      <path d="M12 2v5M9.5 4.5 12 7l2.5-2.5" />
+    </>
+  ),
+  keyDown: (
+    <>
+      <rect x="3" y="11" width="18" height="10" rx="2.5" />
+      <path d="M12 2v6M9 5.5 12 8.5l3-3" />
+    </>
+  ),
+  keyUp: (
+    <>
+      <rect x="3" y="11" width="18" height="10" rx="2.5" />
+      <path d="M12 9V3M9 5.5 12 2.5l3 3" />
+    </>
+  ),
+  combo: (
+    <>
+      <rect x="2.5" y="7" width="8" height="10" rx="2" />
+      <rect x="13.5" y="7" width="8" height="10" rx="2" />
+      <path d="M11 12h2" />
+    </>
+  ),
+  text: <path d="M5 6V4h14v2M12 4v16M9 20h6" />,
+  clock: (
+    <>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </>
+  ),
+  grid: (
+    <>
+      <rect x="4" y="4" width="6.5" height="6.5" rx="1.5" />
+      <rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" />
+      <rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" />
+      <rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" />
+    </>
+  ),
+  list: <path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" />,
+  left: <path d="m15 6-6 6 6 6" />,
+  right: <path d="m9 6 6 6-6 6" />,
+  code: <path d="m8 7-5 5 5 5M16 7l5 5-5 5" />,
+  open: <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />,
+  terminal: <path d="m5 7 5 5-5 5M12 18h7" />,
   link: <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />,
 } as const;
 

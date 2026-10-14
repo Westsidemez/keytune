@@ -1,9 +1,12 @@
 // Lighting: effects, per-key painting, mixed zones and indicator lights.
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { LayoutKey } from "../../shared/layout";
 import type { HSV, MixedEffect } from "../../shared/protocol/commands";
 import { KeyboardView } from "../components/KeyboardView";
+import { MiniBoard } from "../components/MiniBoard";
+import { EFFECT_GROUPS, effectInfo } from "../effects";
+import type { KeyboardModel } from "../../shared/definitions";
 import { Workspace } from "../components/Workspace";
 import { Button, Card, ColorInput, ColorPicker, Empty, Icon, Segmented, Slider, Toggle } from "../components/ui";
 import { assignZones, paintKeys, setColor, setEffect, setIndicators, setLightingValue, setPerKeyType, setZoneEffects } from "../actions";
@@ -134,71 +137,104 @@ export function LightingView() {
   );
 }
 
-function effectSwatch(name: string, h: number, s: number): string {
-  if (/cycle|rainbow|pinwheel|spiral|beacon|rain|pixel/i.test(name)) return "linear-gradient(120deg, #ff4d4d, #ffd23d, #3ddc97, #4da3ff, #c77dff)";
-  if (/heatmap/i.test(name)) return "linear-gradient(120deg, #3ddc97, #ffd23d, #ff4d4d)";
-  if (/digital rain/i.test(name)) return "linear-gradient(180deg, #021a0a, #3ddc97)";
-  const base = hsvCss({ h, s, v: 255 });
-  if (/breath/i.test(name)) return `radial-gradient(circle at 50% 60%, ${base}, #111 75%)`;
-  if (/reactive|splash|nexus|cross/i.test(name)) return `radial-gradient(circle at 30% 50%, ${base}, transparent 45%), #121316`;
-  if (/band|gradient/i.test(name)) return `linear-gradient(90deg, #111, ${base}, #111)`;
-  return base;
+interface GalleryItem {
+  id: number;
+  title: string;
+  description: string;
+  usesColour: boolean;
+  reacts?: boolean;
 }
 
 function EffectGallery() {
   const kb = useStudio((s) => s.kb)!;
   const model = useStudio((s) => s.model)!;
   const lighting = kb.lighting!;
-  const special: { id: number; name: string; swatch: string }[] = [];
-  if (model.perKeyMode !== undefined && lighting.perKey) special.push({ id: model.perKeyMode, name: "Your key colours", swatch: "linear-gradient(90deg, #ff7a3d 0 25%, #4da3ff 25% 50%, #3ddc97 50% 75%, #c77dff 75%)" });
-  if (model.mixedMode !== undefined && lighting.mixed) special.push({ id: model.mixedMode, name: "Your zones", swatch: "linear-gradient(90deg, #ff7a3d 0 50%, #4da3ff 50%)" });
+
+  const groups = useMemo(() => {
+    const byGroup = new Map<string, GalleryItem[]>();
+    const yours: GalleryItem[] = [];
+    if (model.perKeyMode !== undefined && lighting.perKey) yours.push({ id: model.perKeyMode, title: "Your key colours", description: "The colours you painted on each key.", usesColour: false });
+    if (model.mixedMode !== undefined && lighting.mixed) yours.push({ id: model.mixedMode, title: "Your zones", description: "Each zone plays its own effects in turn.", usesColour: false });
+    yours.push({ id: 0, title: "Off", description: "All lights off.", usesColour: false });
+    for (const e of model.effects) {
+      const info = effectInfo(e.name);
+      const list = byGroup.get(info.group) ?? [];
+      list.push({ id: e.id, title: info.title, description: info.description, usesColour: info.usesColour, reacts: info.group === "typing" });
+      byGroup.set(info.group, list);
+    }
+    return [
+      { id: "yours", title: "Yours", subtitle: "Designs you made in this app", items: yours },
+      ...EFFECT_GROUPS.filter((g) => byGroup.has(g.id)).map((g) => ({ ...g, items: byGroup.get(g.id)! })),
+    ];
+  }, [model, lighting.perKey, lighting.mixed]);
+
+  const previewLighting = useCallback((id: number) => ({ ...lighting, effect: id, brightness: 255 }), [lighting]);
+
   return (
     <div className="effect-gallery">
-      <button className={`effect-card${lighting.effect === 0 ? " on" : ""}`} onClick={() => void setEffect(0)}>
-        <span className="effect-swatch off" />
-        <span>Off</span>
-      </button>
-      {special.map((e) => (
-        <button key={e.id} className={`effect-card special${lighting.effect === e.id ? " on" : ""}`} onClick={() => void setEffect(e.id)}>
-          <span className="effect-swatch" style={{ background: e.swatch }} />
-          <span>{e.name}</span>
-        </button>
-      ))}
-      {model.effects.map((e) => (
-        <button key={e.id} className={`effect-card${lighting.effect === e.id ? " on" : ""}`} onClick={() => void setEffect(e.id)}>
-          <span className="effect-swatch" style={{ background: effectSwatch(e.name, lighting.hue, lighting.sat) }} />
-          <span>{e.name}</span>
-        </button>
+      {groups.map((g) => (
+        <section key={g.id} className="effect-group">
+          <header>
+            <h4>{g.title}</h4>
+            {g.subtitle && <span>{g.subtitle}</span>}
+          </header>
+          <div className="effect-grid">
+            {g.items.map((e) => (
+              <button
+                key={e.id}
+                className={`effect-card${lighting.effect === e.id ? " on" : ""}`}
+                onClick={() => void setEffect(e.id)}
+                title={e.description}
+              >
+                <span className="effect-preview">
+                  {e.id === 0 ? <span className="effect-off" /> : <MiniBoard model={model} lighting={previewLighting(e.id)} ledMap={kb.ledMap} cols={kb.cols} />}
+                  {lighting.effect === e.id && <span className="effect-live">On keyboard</span>}
+                </span>
+                <span className="effect-text">
+                  <strong>{e.title}</strong>
+                  <small>{e.description}</small>
+                </span>
+                <span className="effect-tags">
+                  {e.usesColour && <span className="tag" style={{ "--c": hsvCss({ h: lighting.hue, s: lighting.sat, v: 255 }) } as React.CSSProperties}>Your colour</span>}
+                  {e.reacts && <span className="tag">Typing</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
+}
+
+function effectSummary(model: KeyboardModel, effect: number): { title: string; description: string; usesColour: boolean } {
+  if (effect === 0) return { title: "Off", description: "All lights are off.", usesColour: false };
+  if (effect === model.perKeyMode) return { title: "Your key colours", description: "Showing the colours you painted. Change them under Paint keys.", usesColour: false };
+  if (effect === model.mixedMode) return { title: "Your zones", description: "Each zone plays its own timeline. Edit them under Zones.", usesColour: false };
+  const name = model.effects.find((e) => e.id === effect)?.name;
+  return name ? effectInfo(name) : { title: `Effect ${effect}`, description: "", usesColour: true };
 }
 
 function GlobalLighting() {
   const kb = useStudio((s) => s.kb)!;
   const model = useStudio((s) => s.model)!;
   const l = kb.lighting!;
-  const effectName = l.effect === 0 ? "Off" : l.effect === model.perKeyMode ? "Your key colours" : l.effect === model.mixedMode ? "Your zones" : (model.effects.find((e) => e.id === l.effect)?.name ?? `Effect ${l.effect}`);
-  const usesColour = l.effect !== 0 && l.effect !== model.perKeyMode && l.effect !== model.mixedMode;
+  const info = effectSummary(model, l.effect);
   return (
     <div className="inspector-body">
       <div className="inspector-title">
-        <span className="eyebrow">Now playing</span>
-        <h2>{effectName}</h2>
+        <span className="eyebrow">On the keyboard now</span>
+        <h2>{info.title}</h2>
+        {info.description && <p className="muted">{info.description}</p>}
       </div>
       <Card>
         <Slider label="Brightness" value={l.brightness} onPreview={(v) => void setLightingValue("brightness", v, false)} onCommit={(v, start) => void setLightingValue("brightness", v, true, start)} />
         <Slider label="Speed" value={l.speed} disabled={l.effect === 0} onPreview={(v) => void setLightingValue("speed", v, false)} onCommit={(v, start) => void setLightingValue("speed", v, true, start)} />
       </Card>
-      <Card title="Colour" subtitle={usesColour ? undefined : "Used by single-colour effects"}>
-        <ColorPicker
-          value={{ h: l.hue, s: l.sat, v: 255 }}
-          showValue={false}
-          onChange={(hsv) => void setColor(hsv, false)}
-          onCommit={(hsv, start) => void setColor(hsv, true, start)}
-        />
+      <Card title="Colour" subtitle={info.usesColour ? "Used by this effect" : "This effect makes its own colours; effects tagged “Your colour” use this."}>
+        <ColorPicker value={{ h: l.hue, s: l.sat, v: 255 }} showValue={false} onChange={(hsv) => void setColor(hsv, false)} onCommit={(hsv, start) => void setColor(hsv, true, start)} />
       </Card>
-      <p className="muted small">Changes apply to the keyboard as you make them. Use ⌘Z to go back.</p>
+      <p className="muted small">Changes apply to the keyboard as you make them. Press ⌘Z to go back.</p>
     </div>
   );
 }

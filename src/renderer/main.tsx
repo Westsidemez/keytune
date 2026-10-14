@@ -20,7 +20,12 @@ window.__smokeReady = async (view: string) => {
   for (let i = 0; i < 100 && getState().connection.status !== "connected"; i++) await new Promise((r) => setTimeout(r, 50));
   const s = getState();
   const [name, option] = view.split(":");
+  if (name === "macros") localStorage.setItem("studio.macroLibraryLayout", option === "grid" ? "grid" : "list");
   setState({ view: name as View });
+  if (name === "macros" && option === "code") {
+    await new Promise((r) => setTimeout(r, 200));
+    document.querySelectorAll<HTMLButtonElement>(".editor-top .segmented button")[1]?.click();
+  }
   if (name === "keymap" && s.model) {
     const key = s.model.layout.keys.find((k) => k.row === 3 && k.col === 0);
     if (key) setState({ selection: { kind: "key", id: key.id } });

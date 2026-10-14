@@ -16,6 +16,7 @@ const host: StudioHost = {
   runAppMacro: (id) => ipcRenderer.invoke("appMacros:run", id),
   scanDevices: () => ipcRenderer.invoke("hid:scan"),
   openExternal: (url) => ipcRenderer.invoke("shell:openExternal", url),
+  findMacroDownload: () => ipcRenderer.invoke("macros:findDownload"),
   setRecording: (on) => ipcRenderer.invoke("window:recording", on),
   onCommand: (listener) => {
     const handler = (_event: unknown, command: string) => listener(command);

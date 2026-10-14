@@ -215,6 +215,7 @@ function setupIpc(): void {
       true,
     );
   });
+  ipcMain.handle("macros:findDownload", () => findMacroDownload());
   ipcMain.handle("window:recording", (event, on: boolean) => {
     event.sender.setIgnoreMenuShortcuts(Boolean(on));
   });
@@ -222,6 +223,38 @@ function setupIpc(): void {
     if (!/^https:\/\//.test(url)) throw new Error("Only https links can be opened");
     return shell.openExternal(url);
   });
+}
+
+/** Newest "*macro*.json" in Downloads from the last 30 days (Keychron Launcher exports "<Keyboard> Macro.json"). */
+function findMacroDownload(): { name: string; modified: number; data: unknown } | null {
+  const dir = app.getPath("downloads");
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return null;
+  }
+  const cutoff = Date.now() - 30 * 24 * 3600 * 1000;
+  const candidates = names
+    .filter((n) => /macro.*\.json$/i.test(n))
+    .map((n) => {
+      try {
+        const stat = fs.statSync(path.join(dir, n));
+        return stat.isFile() && stat.size < 2_000_000 && stat.mtimeMs > cutoff ? { name: n, modified: stat.mtimeMs } : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((c): c is { name: string; modified: number } => c !== null)
+    .sort((a, b) => b.modified - a.modified);
+  for (const c of candidates) {
+    try {
+      return { ...c, data: JSON.parse(fs.readFileSync(path.join(dir, c.name), "utf8")) };
+    } catch {
+      // Not JSON; try the next one.
+    }
+  }
+  return null;
 }
 
 async function runSmokeTest(file: string): Promise<void> {

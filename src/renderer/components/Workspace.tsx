@@ -2,9 +2,9 @@
 
 import type { ReactNode } from "react";
 
-export function Workspace({ keyboard, panel, inspector, toolbar }: { keyboard?: ReactNode; panel?: ReactNode; inspector?: ReactNode; toolbar?: ReactNode }) {
+export function Workspace({ keyboard, panel, inspector, toolbar, compact }: { keyboard?: ReactNode; panel?: ReactNode; inspector?: ReactNode; toolbar?: ReactNode; compact?: boolean }) {
   return (
-    <div className={`workspace${inspector ? "" : " no-inspector"}`}>
+    <div className={`workspace${inspector ? "" : " no-inspector"}${compact ? " compact-stage" : ""}`}>
       <div className="workspace-main">
         {keyboard && (
           <div className="stage">
