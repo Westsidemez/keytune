@@ -1,4 +1,4 @@
-/* Keychron Studio */
+/* Keytune */
 
 :root,
 [data-theme="dark"] {
@@ -1888,10 +1888,55 @@ input[type="range"]::-webkit-slider-thumb {
   line-height: 1.35;
 }
 
+.column-head.stacked {
+  flex-wrap: wrap;
+  row-gap: 0;
+}
+
+.column-head.stacked > p {
+  flex-basis: 100%;
+}
+
 .column-tools {
   display: flex;
   gap: 2px;
   margin-top: -2px;
+}
+
+.icon-btn.labelled {
+  display: inline-flex;
+  gap: 5px;
+  width: auto;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.export-choices {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.export-choice {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.export-choice:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.export-choice span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .download-banner {

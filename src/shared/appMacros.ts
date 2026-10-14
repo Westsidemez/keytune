@@ -103,6 +103,35 @@ export function validateAppMacros(value: unknown): AppMacro[] {
   );
 }
 
+const SHORTCUT_MODS: ShortcutMod[] = ["cmd", "ctrl", "alt", "shift"];
+
+/** Check one action from a file; null when it isn't one this app can run. */
+export function parseAppAction(value: unknown): AppMacroAction | null {
+  if (!value || typeof value !== "object") return null;
+  const a = value as Record<string, unknown>;
+  const str = (k: string) => (typeof a[k] === "string" ? (a[k] as string) : null);
+  switch (a.type) {
+    case "text":
+      return str("text") !== null ? { type: "text", text: str("text")! } : null;
+    case "shortcut": {
+      const key = str("key");
+      const mods = Array.isArray(a.mods) ? a.mods.filter((m): m is ShortcutMod => SHORTCUT_MODS.includes(m as ShortcutMod)) : [];
+      return key ? { type: "shortcut", mods, key } : null;
+    }
+    case "down":
+    case "up":
+      return str("key") ? { type: a.type, key: str("key")! } : null;
+    case "delay":
+      return typeof a.ms === "number" && Number.isFinite(a.ms) ? { type: "delay", ms: Math.max(0, Math.min(60_000, Math.round(a.ms))) } : null;
+    case "open":
+      return str("target") ? { type: "open", target: str("target")! } : null;
+    case "shell":
+      return str("command") ? { type: "shell", command: str("command")! } : null;
+    default:
+      return null;
+  }
+}
+
 /** Key names the runner understands for shortcut actions. */
 export const SHORTCUT_KEYS = [
   ..."abcdefghijklmnopqrstuvwxyz0123456789".split(""),

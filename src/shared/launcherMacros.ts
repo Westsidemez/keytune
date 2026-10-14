@@ -1,4 +1,5 @@
-// Macro files from Keychron Launcher ("<Keyboard> Macro.json") and similar tools.
+// Macro files: Keytune's own (every macro with its name, plus app macros), Keychron
+// Launcher's ("<Keyboard> Macro.json") and similar tools.
 //
 // Launcher's export is its internal list: one array per macro slot, each step
 // [type, keyName, keycodeName] with type 1 tap, 2 press, 3 release, 4 delay
@@ -6,14 +7,39 @@
 
 import { decodeMacro, encodeActions, type MacroAction } from "./macros";
 import { keycodeName, parseKeycode } from "./keycodes";
-import { viaTextToMacro } from "./profile";
+import { macroToViaText, viaTextToMacro } from "./profile";
+import { parseAppAction, type AppMacro, type AppMacroAction } from "./appMacros";
 
 export interface ImportedMacros {
   macros: Uint8Array[];
   names: (string | null)[];
   /** Key names that couldn't be understood; those steps were left out. */
   unknown: string[];
-  source: "launcher" | "via-code" | "studio";
+  source: "launcher" | "via-code" | "studio" | "keytune";
+  /** App macros from a Keytune file (they get fresh ids and triggers on import). */
+  appMacros?: { name: string; actions: AppMacroAction[] }[];
+}
+
+export const MACRO_FILE_FORMAT = "keytune-macros";
+
+export interface KeytuneMacroFile {
+  format: typeof MACRO_FILE_FORMAT;
+  version: 1;
+  keyboard?: { name: string; vendorId: number; productId: number };
+  /** Onboard macros in VIA's macro text, which reads well and round-trips exactly. */
+  macros: { index: number; name: string | null; code: string }[];
+  appMacros: { name: string; actions: AppMacroAction[] }[];
+}
+
+/** Every onboard macro (with its name) and every app macro, in one file. */
+export function toKeytuneMacros(macros: Uint8Array[], names: (string | null | undefined)[], appMacros: AppMacro[], keyboard?: KeytuneMacroFile["keyboard"]): KeytuneMacroFile {
+  return {
+    format: MACRO_FILE_FORMAT,
+    version: 1,
+    keyboard,
+    macros: macros.map((bytes, index) => ({ index, name: names[index] ?? null, code: macroToViaText(bytes) })),
+    appMacros: appMacros.map((m) => ({ name: m.name, actions: m.actions })),
+  };
 }
 
 const TAP = 1;
@@ -68,6 +94,25 @@ export function parseMacroFile(value: unknown): ImportedMacros | null {
 
   if (value && typeof value === "object") {
     const o = value as Record<string, unknown>;
+    if (o.format === MACRO_FILE_FORMAT) {
+      const list = Array.isArray(o.macros) ? (o.macros as { index?: unknown; name?: unknown; code?: unknown }[]) : [];
+      const size = Math.max(0, ...list.map((m, i) => (typeof m?.index === "number" ? m.index : i) + 1));
+      const macros: Uint8Array[] = Array.from({ length: size }, () => new Uint8Array());
+      const names: (string | null)[] = Array(size).fill(null);
+      list.forEach((m, i) => {
+        if (!m || typeof m.code !== "string") return;
+        const at = typeof m.index === "number" ? m.index : i;
+        macros[at] = viaTextToMacro(m.code);
+        names[at] = typeof m.name === "string" && m.name.trim() ? m.name.trim() : null;
+      });
+      const appMacros = (Array.isArray(o.appMacros) ? o.appMacros : []).flatMap((m: unknown) => {
+        if (!m || typeof m !== "object" || !Array.isArray((m as { actions?: unknown }).actions)) return [];
+        const { name, actions } = m as { name?: unknown; actions: unknown[] };
+        const parsed = actions.map(parseAppAction).filter((a): a is AppMacroAction => a !== null);
+        return [{ name: typeof name === "string" && name.trim() ? name.trim() : "Imported app macro", actions: parsed }];
+      });
+      return { ...done(macros, names, "keytune"), appMacros };
+    }
     // Launcher's mouse-style export: { md5, macro, name }.
     if (isLauncherList(o.macro)) return done(o.macro.map((m) => launcherMacro(m, unknown)), o.macro.map(() => null), "launcher");
     // { macros: [{ index, name, code }] } with VIA-style code text.

@@ -7,11 +7,11 @@ import { actionsToSteps, decodeMacroSteps, encodeMacroSteps, macroBufferBytes, u
 import { describe, isModifierKey, kc, keycodeName, macroKey, type Platform } from "../../shared/keycodes";
 import { newAppMacro, SHORTCUT_KEYS, triggerAccelerator, type AppMacro, type AppMacroAction, type ShortcutMod } from "../../shared/appMacros";
 import { macroToViaText, parseProfile, profileMacroData, viaTextToMacro } from "../../shared/profile";
-import { parseMacroFile, toLauncherMacros, type ImportedMacros } from "../../shared/launcherMacros";
+import { parseMacroFile, toKeytuneMacros, toLauncherMacros, type ImportedMacros } from "../../shared/launcherMacros";
 import type { LayoutKey } from "../../shared/layout";
 import { KeyboardView } from "../components/KeyboardView";
 import { Workspace } from "../components/Workspace";
-import { Button, Empty, Icon, ICONS, Segmented } from "../components/ui";
+import { Button, Empty, Icon, ICONS, Modal, Segmented } from "../components/ui";
 import { BasicKeySelect } from "./Keymap";
 import { assignKey, writeMacros } from "../actions";
 import { errorMessage, getState, host, macroNames, setMacroName, setState, toast, updateSettings, useStudio } from "../store";
@@ -39,6 +39,7 @@ export function MacrosView() {
   const [selected, setSelected] = useState<Selected>(kb.macros.count ? { kind: "onboard", index: 0 } : { kind: "app", id: appMacros[0]?.id ?? "" });
   const [drafts, setDrafts] = useState<Map<number, MacroStep[]>>(new Map());
   const [tab, setTab] = useState<Tab>("steps");
+  const [exporting, setExporting] = useState(false);
 
   const stepsFor = (i: number) => drafts.get(i) ?? decodeMacroSteps(kb.macros.data[i] ?? new Uint8Array());
   const encoded = useMemo(() => kb.macros.data.map((d, i) => (drafts.has(i) ? encodeMacroSteps(drafts.get(i)!) : d)), [kb.macros.data, drafts]);
@@ -64,6 +65,7 @@ export function MacrosView() {
       if (macros) result = { macros, names: profile.macros?.names ?? [], unknown: [], source: "studio" };
     }
     if (!result) throw new Error(`${label} doesn't contain macros this app understands`);
+    const added = await addAppMacros(result.appMacros ?? []);
     const next = new Map(drafts);
     let count = 0;
     result.macros.forEach((bytes, i) => {
@@ -75,14 +77,42 @@ export function MacrosView() {
     for (const [i, name] of result.names.entries()) if (name && i < kb.macros.count) await setMacroName(i, name);
     const extra = result.macros.slice(kb.macros.count).filter((m) => m.length).length;
     const from = result.source === "launcher" ? "Keychron Launcher" : result.source === "studio" ? "the profile" : "the file";
+    const appNote = added.added
+      ? ` Added ${added.added} app macro${added.added === 1 ? "" : "s"}${added.commands ? ` (${added.commands} run${added.commands === 1 ? "s" : ""} a command: check before using)` : ""}; assign them to keys to use them.`
+      : "";
     toast(
-      `Imported ${count} macro${count === 1 ? "" : "s"} from ${from}. Check them, then Save to keyboard.` +
+      (count || !added.added ? `Imported ${count} macro${count === 1 ? "" : "s"} from ${from}. Check them, then Save to keyboard.` : `Nothing for the keyboard's own slots in ${label.toLowerCase()}.`) +
+        appNote +
+        (added.skipped ? ` ${added.skipped} app macro${added.skipped === 1 ? "" : "s"} didn't fit: all app macro slots are in use.` : "") +
         (extra ? ` ${extra} didn't fit in this keyboard's ${kb.macros.count} slots.` : "") +
         (result.unknown.length ? ` Skipped unknown keys: ${result.unknown.slice(0, 4).join(", ")}.` : ""),
-      result.unknown.length || extra ? "error" : "success",
+      result.unknown.length || extra || added.skipped ? "error" : "success",
     );
-    setSelected({ kind: "onboard", index: Math.max(0, result.macros.findIndex((m) => m.length)) });
+    if (count || !added.first) setSelected({ kind: "onboard", index: Math.max(0, result.macros.findIndex((m) => m.length)) });
+    else setSelected({ kind: "app", id: added.first });
     setTab("steps");
+  };
+
+  /** Imported app macros get new ids and free triggers, so they never clash with existing ones. */
+  const addAppMacros = async (incoming: NonNullable<ImportedMacros["appMacros"]>) => {
+    const list = [...getState().settings.appMacros];
+    let added = 0;
+    let commands = 0;
+    let first: string | undefined;
+    for (const m of incoming) {
+      let macro: AppMacro;
+      try {
+        macro = { ...newAppMacro(list, m.name), actions: m.actions };
+      } catch {
+        break;
+      }
+      list.push(macro);
+      first ??= macro.id;
+      added++;
+      if (m.actions.some((a) => a.type === "shell")) commands++;
+    }
+    if (added) await updateSettings({ appMacros: list });
+    return { added, commands, skipped: incoming.length - added, first };
   };
 
   const importFile = async () => {
@@ -94,8 +124,20 @@ export function MacrosView() {
     }
   };
 
-  const exportFile = async () => {
-    await host.exportJson(`${kb.info.productName} Macro.json`, toLauncherMacros(encoded)).catch((e) => toast(errorMessage(e), "error"));
+  const exportFile = () => setExporting(true);
+
+  const exportAs = async (kind: "keytune" | "launcher") => {
+    setExporting(false);
+    const keyboard = { name: kb.info.productName, vendorId: kb.info.vendorId, productId: kb.info.productId };
+    const [name, data] =
+      kind === "keytune"
+        ? [`${kb.info.productName} Macros (Keytune).json`, toKeytuneMacros(encoded, macroNames().slice(0, encoded.length), appMacros, keyboard)]
+        : [`${kb.info.productName} Macro.json`, toLauncherMacros(encoded)];
+    try {
+      if (await host.exportJson(name, data)) toast("Macros exported", "success");
+    } catch (error) {
+      toast(errorMessage(error), "error");
+    }
   };
 
   const selectedKey = selection?.kind === "key" ? model.layout.keys.find((k) => k.id === selection.id) : undefined;
@@ -132,6 +174,7 @@ export function MacrosView() {
       }
       panel={
         <div className="macro-studio">
+          {exporting && <ExportDialog onClose={() => setExporting(false)} onExport={(k) => void exportAs(k)} onboard={encoded.filter((m) => m.length).length} app={appMacros.length} />}
           <MacroLibrary
             selected={selected}
             onSelect={setSelected}
@@ -357,22 +400,24 @@ function MacroLibrary({
 
   return (
     <section className="macro-library">
-      <header className="column-head">
+      <header className="column-head stacked">
         <div>
           <h3>Macros</h3>
-          <p>Pick one, then click a key above to put it there.</p>
         </div>
         <div className="column-tools">
           <button className="icon-btn" title={layout === "list" ? "Show as grid" : "Show as list"} onClick={toggleLayout}>
             <Icon name={layout === "list" ? "grid" : "list"} size={16} />
           </button>
-          <button className="icon-btn" title="Import macros (Keychron Launcher, VIA or Keychron Studio file)" onClick={onImport}>
-            <Icon name="upload" size={16} />
+          <button className="icon-btn labelled" title="Import macros from a Keytune, Keychron Launcher or VIA file" onClick={onImport}>
+            <Icon name="upload" size={15} />
+            Import
           </button>
-          <button className="icon-btn" title="Export macros (Keychron Launcher can open the file too)" onClick={onExport}>
-            <Icon name="download" size={16} />
+          <button className="icon-btn labelled" title="Save all macros to a file" onClick={onExport}>
+            <Icon name="download" size={15} />
+            Export
           </button>
         </div>
+        <p>Pick one, then click a key above to put it there.</p>
       </header>
 
       {download && (
@@ -774,7 +819,7 @@ function AppWorkbench({ macro, ...shared }: { macro: AppMacro } & SharedProps) {
           {failed && <p className="banner warn">Another app already uses this macro's trigger ({failed.accelerator}). Delete and recreate the macro to get a free one.</p>}
           {status?.accessibility === "denied" && (
             <p className="banner warn">
-              macOS needs to allow Keychron Studio under Privacy & Security → Accessibility before it can type or press keys.{" "}
+              macOS needs to allow Keytune under Privacy & Security → Accessibility before it can type or press keys.{" "}
               <Button small onClick={() => void host.requestAccessibility().then((st) => setState({ appMacroStatus: st }))}>
                 Allow access…
               </Button>
@@ -1166,7 +1211,7 @@ function AssignPanel({ code, badge, name, steps, isApp, selectedKey }: { code: n
           <span className="muted small">Not on any key yet</span>
         )}
       </div>
-      {isApp && <p className="muted small assign-note">Works while Keychron Studio is running.</p>}
+      {isApp && <p className="muted small assign-note">Works while Keytune is running.</p>}
     </aside>
   );
 }
@@ -1495,5 +1540,26 @@ function KeyPalette({ onPick, addKind, setAddKind, hint, showKind }: { onPick: (
         {!groups.length && !modRows.length && <p className="muted small">No keys match “{query}”.</p>}
       </div>
     </section>
+  );
+}
+
+function ExportDialog({ onClose, onExport, onboard, app }: { onClose: () => void; onExport: (kind: "keytune" | "launcher") => void; onboard: number; app: number }) {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return (
+    <Modal title="Export macros" onClose={onClose}>
+      <div className="export-choices">
+        <button className="export-choice" onClick={() => onExport("keytune")}>
+          <strong>Keytune file</strong>
+          <span>
+            Everything: {plural(onboard, "keyboard macro")} with their names and {plural(app, "app macro")}. Import it on another computer or keyboard.
+          </span>
+        </button>
+        <button className="export-choice" onClick={() => onExport("launcher")}>
+          <strong>Keychron Launcher file</strong>
+          <span>The keyboard's own macros only, without names, in the format Keychron Launcher opens.</span>
+        </button>
+      </div>
+      <p className="muted small">Unsaved changes are included.</p>
+    </Modal>
   );
 }
