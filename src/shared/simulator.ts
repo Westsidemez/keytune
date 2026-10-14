@@ -17,6 +17,10 @@ export interface SimulatorOptions {
   firmware?: string;
   /** Drop the reply to the next N requests (to exercise timeouts). */
   dropReplies?: number;
+  /** False to act as a plain VIA keyboard without Keychron's commands. */
+  keychron?: boolean;
+  /** VIA channel the lighting answers on (3 RGB matrix, 2 underglow, 1 backlight); 0 for none. */
+  lightingChannel?: number;
 }
 
 interface Hsv {
@@ -150,7 +154,7 @@ export class SimulatedKeyboard implements HidLink {
   // --- firmware ----------------------------------------------------------------------
 
   private handle(data: Uint8Array): Uint8Array | null {
-    if (this.keychron(data)) return data;
+    if (this.options.keychron !== false && this.keychron(data)) return data;
     this.via(data);
     return data;
   }
@@ -564,7 +568,7 @@ export class SimulatedKeyboard implements HidLink {
   }
 
   private customValue(data: Uint8Array): void {
-    if (data[1] !== 3) {
+    if (data[1] !== (this.options.lightingChannel ?? 3)) {
       data[0] = 0xff;
       return;
     }

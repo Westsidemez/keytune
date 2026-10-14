@@ -1,17 +1,37 @@
 // Keyboard definitions in VIA's JSON format, with the physical layout in
 // keyboard-layout-editor (KLE) notation. Each key's first legend is its matrix
 // position "row,col"; an "eN" legend marks rotary encoder N; a "group,choice"
-// legend in slot 8 marks a layout option.
+// legend in slot 8 marks a layout option. VIA's online library serves the same
+// definitions "compiled": a numeric vendorProductId and the keys already laid out.
 
 export interface ViaDefinition {
   name: string;
   vendorId: string;
   productId: string;
   matrix: { rows: number; cols: number };
-  layouts: { keymap: unknown[][]; labels?: (string | string[])[] };
+  /** KLE rows (source definitions) or pre-positioned keys (VIA's compiled definitions). */
+  layouts: { keymap?: unknown[][]; keys?: CompiledKey[]; optionKeys?: Record<string, Record<string, CompiledKey[]>>; labels?: (string | string[])[] };
   customKeycodes?: { name: string; title?: string; shortName?: string }[];
   menus?: unknown[];
   keycodes?: string[];
+}
+
+/** A key in VIA's compiled layout. */
+export interface CompiledKey {
+  row: number;
+  col: number;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  x2?: number;
+  y2?: number;
+  w2?: number;
+  h2?: number;
+  d?: boolean;
+  /** Encoder index. */
+  ei?: number;
+  color?: string;
 }
 
 export interface LayoutKey {
@@ -52,10 +72,40 @@ interface KleProps {
 }
 
 export function parseLayout(definition: ViaDefinition, options: number[] = []): KeyboardLayout {
+  const keys = definition.layouts.keymap ? parseKle(definition.layouts.keymap, options) : compiledKeys(definition.layouts, options);
+  const width = Math.max(0, ...keys.map((k) => k.x + Math.max(k.w, k.shape2 ? k.shape2.x + k.shape2.w : 0)));
+  const height = Math.max(0, ...keys.map((k) => k.y + Math.max(k.h, k.shape2 ? k.shape2.y + k.shape2.h : 0)));
+  const encoders = keys.reduce((n, k) => (k.encoder === undefined ? n : Math.max(n, k.encoder + 1)), 0);
+  return { keys, width, height, encoders };
+}
+
+/** VIA's compiled colour names, as the KLE colours the source definitions use. */
+const COMPILED_COLOURS: Record<string, string> = { alpha: "#cccccc", mod: "#aaaaaa", accent: "#777777" };
+
+function compiledKeys(layouts: ViaDefinition["layouts"], options: number[]): LayoutKey[] {
+  if (!Array.isArray(layouts.keys)) throw new Error("Definition needs layouts.keymap or layouts.keys");
+  const all = [...layouts.keys];
+  for (const [group, choices] of Object.entries(layouts.optionKeys ?? {})) {
+    all.push(...(choices[String(options[Number(group)] ?? 0)] ?? []));
+  }
+  const keys: LayoutKey[] = [];
+  for (const k of all) {
+    if (!k || typeof k !== "object" || k.d) continue;
+    if (typeof k.row !== "number" || typeof k.col !== "number" || typeof k.x !== "number" || typeof k.y !== "number") throw new Error("Layout keys need row, col, x and y");
+    const key: LayoutKey = { id: `${k.row},${k.col}`, row: k.row, col: k.col, x: k.x, y: k.y, w: k.w ?? 1, h: k.h ?? 1, color: COMPILED_COLOURS[k.color ?? ""] ?? k.color };
+    if (typeof k.ei === "number") key.encoder = k.ei;
+    if (k.x2 !== undefined || k.y2 !== undefined || k.w2 !== undefined || k.h2 !== undefined) {
+      key.shape2 = { x: k.x2 ?? 0, y: k.y2 ?? 0, w: k.w2 ?? key.w, h: k.h2 ?? key.h };
+    }
+    keys.push(key);
+  }
+  return keys;
+}
+
+function parseKle(rows: unknown[][], options: number[]): LayoutKey[] {
   const keys: LayoutKey[] = [];
   let y = 0;
   let color: string | undefined;
-  const rows = definition.layouts.keymap;
   rows.forEach((row, rowIndex) => {
     if (!Array.isArray(row)) throw new Error("Layout rows must be arrays");
     let x = 0;
@@ -105,19 +155,29 @@ export function parseLayout(definition: ViaDefinition, options: number[] = []): 
       next = { w: 1, h: 1 };
     }
   });
-  const width = Math.max(0, ...keys.map((k) => k.x + Math.max(k.w, k.shape2 ? k.shape2.x + k.shape2.w : 0)));
-  const height = Math.max(0, ...keys.map((k) => k.y + Math.max(k.h, k.shape2 ? k.shape2.y + k.shape2.h : 0)));
-  const encoders = keys.reduce((n, k) => (k.encoder === undefined ? n : Math.max(n, k.encoder + 1)), 0);
-  return { keys, width, height, encoders };
+  return keys;
 }
 
+/** Check a definition and return it in the source shape (hex vendorId/productId strings). */
 export function validateDefinition(value: unknown): ViaDefinition {
-  const d = value as Partial<ViaDefinition>;
-  if (!d || typeof d !== "object") throw new Error("Definition must be a JSON object");
+  if (!value || typeof value !== "object") throw new Error("Definition must be a JSON object");
+  const compiled = value as Partial<ViaDefinition> & { vendorProductId?: unknown };
+  let d: Partial<ViaDefinition> = compiled;
+  if (typeof compiled.vendorProductId === "number" && typeof compiled.vendorId !== "string") {
+    const hex = (n: number) => `0x${n.toString(16).toUpperCase().padStart(4, "0")}`;
+    const { vendorProductId, ...rest } = compiled;
+    d = { ...rest, vendorId: hex(Math.floor(vendorProductId / 0x10000)), productId: hex(vendorProductId % 0x10000) };
+  }
+  // VIA v2 definitions name their lighting instead of listing menus.
+  const lighting = (d as { lighting?: unknown }).lighting;
+  if (!d.menus && lighting) {
+    const preset = typeof lighting === "string" ? lighting : (lighting as { extends?: unknown }).extends;
+    if (typeof preset === "string" && preset !== "none") d = { ...d, menus: [preset] };
+  }
   if (typeof d.name !== "string") throw new Error("Definition needs a name");
   if (typeof d.vendorId !== "string" || typeof d.productId !== "string") throw new Error("Definition needs vendorId and productId");
   if (!d.matrix || typeof d.matrix.rows !== "number" || typeof d.matrix.cols !== "number") throw new Error("Definition needs matrix rows and cols");
-  if (!d.layouts || !Array.isArray(d.layouts.keymap)) throw new Error("Definition needs layouts.keymap");
+  if (!d.layouts || !(Array.isArray(d.layouts.keymap) || Array.isArray(d.layouts.keys))) throw new Error("Definition needs layouts.keymap");
   parseLayout(d as ViaDefinition);
   return d as ViaDefinition;
 }

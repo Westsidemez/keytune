@@ -33,10 +33,13 @@ function geometry(input: PreviewInput): KeyGeometry[] {
   const { layout, ledMap, cols } = input;
   const midX = layout.width / 2;
   const midY = layout.height / 2;
+  // Keyboards without Keychron's LED map: preview every switch as lit, numbered in layout order.
+  const mapped = ledMap.some((l) => l !== null);
+  let next = 0;
   return layout.keys.map((key, i) => {
     const cx = key.x + key.w / 2;
     const cy = key.y + key.h / 2;
-    const led = key.row >= 0 ? ledMap[key.row * cols + key.col] ?? null : null;
+    const led = key.row < 0 ? null : mapped ? (ledMap[key.row * cols + key.col] ?? null) : key.encoder === undefined ? next++ : null;
     return {
       key,
       led,

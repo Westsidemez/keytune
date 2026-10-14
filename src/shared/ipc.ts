@@ -60,6 +60,8 @@ export interface StudioHost {
   importJson(): Promise<unknown | null>;
   /** Pick a file, folder or app in Finder; returns its path. */
   chooseFile(): Promise<string | null>;
+  /** Download a keyboard's definition from VIA's online library; null when it has none. */
+  fetchViaDefinition(vendorId: number, productId: number): Promise<unknown | null>;
   appMacroStatus(): Promise<AppMacroStatus>;
   requestAccessibility(): Promise<AppMacroStatus>;
   runAppMacro(id: string): Promise<void>;

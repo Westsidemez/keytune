@@ -4,6 +4,7 @@
 import {
   FEATURE,
   KeyboardProtocol,
+  RGB_MATRIX_CHANNEL,
   MISC_FEATURE,
   RGB_VALUE,
   type HSV,
@@ -14,7 +15,7 @@ import {
   type SnapClickPair,
 } from "./protocol/commands";
 import { Transport, UnsupportedCommandError, type HidLink } from "./protocol/transport";
-import { buildModel, type KeyboardModel } from "./definitions";
+import { buildModel, LIGHTING_CHANNEL, type KeyboardModel } from "./definitions";
 import { joinMacroBuffer, macroBufferBytes, splitMacroBuffer } from "./macros";
 import type { ViaDefinition } from "./layout";
 
@@ -41,6 +42,8 @@ export interface LightingState {
   hue: number;
   sat: number;
   ledCount: number;
+  /** False for single-colour backlight, which has no speed or colour. */
+  adjustable?: boolean;
   perKey?: { type: number; colors: HSV[] };
   mixed?: { effectsPerRegion: number; regions: number[]; zones: MixedEffect[][] };
   indicators?: IndicatorConfig;
@@ -194,25 +197,29 @@ export class Keyboard {
 
   // --- lighting ------------------------------------------------------------------
 
+  private get lightingChannel(): number {
+    return this.model.lightingChannel ?? RGB_MATRIX_CHANNEL;
+  }
+
   /** Pass persist=false while a slider is moving; the final value must be persisted. */
   async setBrightness(value: number, persist = true): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.BRIGHTNESS, [clamp8(value)], persist);
+    await this.protocol.setRgbValue(RGB_VALUE.BRIGHTNESS, [clamp8(value)], persist, this.lightingChannel);
     this.updateLighting({ brightness: clamp8(value) });
   }
 
   async setEffect(effect: number): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.EFFECT, [clamp8(effect)]);
+    await this.protocol.setRgbValue(RGB_VALUE.EFFECT, [clamp8(effect)], true, this.lightingChannel);
     this.updateLighting({ effect: clamp8(effect) });
   }
 
   /** Pass persist=false while a slider is moving; the final value must be persisted. */
   async setSpeed(value: number, persist = true): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.SPEED, [clamp8(value)], persist);
+    await this.protocol.setRgbValue(RGB_VALUE.SPEED, [clamp8(value)], persist, this.lightingChannel);
     this.updateLighting({ speed: clamp8(value) });
   }
 
   async setColor(hue: number, sat: number, persist = true): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.COLOR, [clamp8(hue), clamp8(sat)], persist);
+    await this.protocol.setRgbValue(RGB_VALUE.COLOR, [clamp8(hue), clamp8(sat)], persist, this.lightingChannel);
     this.updateLighting({ hue: clamp8(hue), sat: clamp8(sat) });
   }
 
@@ -349,13 +356,16 @@ async function loadState(protocol: KeyboardProtocol, identity: DeviceIdentity, m
   progress("Reading lighting", 0.6);
   let lighting: LightingState | undefined;
   let ledMap: (number | null)[] = Array(rows * cols).fill(null);
-  const brightness = await optional(() => protocol.rgbValue(RGB_VALUE.BRIGHTNESS));
-  if (brightness) {
-    const [effect] = await protocol.rgbValue(RGB_VALUE.EFFECT);
-    const [speed] = await protocol.rgbValue(RGB_VALUE.SPEED);
-    const [hue, sat] = await protocol.rgbValue(RGB_VALUE.COLOR);
-    lighting = { brightness: brightness[0], effect, speed, hue, sat, ledCount: 0 };
-    if (features & FEATURE.KEYCHRON_RGB) {
+  const channel = model.lightingChannel;
+  const brightness = channel === undefined ? undefined : await optional(() => protocol.rgbValue(RGB_VALUE.BRIGHTNESS, channel));
+  if (channel !== undefined && brightness) {
+    const [effect] = await protocol.rgbValue(RGB_VALUE.EFFECT, channel);
+    // Plain backlight has only brightness and effect.
+    const colour = channel !== LIGHTING_CHANNEL.BACKLIGHT;
+    const [speed] = colour ? await protocol.rgbValue(RGB_VALUE.SPEED, channel) : [0];
+    const [hue, sat] = colour ? await protocol.rgbValue(RGB_VALUE.COLOR, channel) : [0, 0];
+    lighting = { brightness: brightness[0], effect, speed, hue, sat, ledCount: 0, adjustable: colour };
+    if (channel === RGB_MATRIX_CHANNEL && features & FEATURE.KEYCHRON_RGB) {
       const ledCount = await protocol.ledCount();
       ledMap = [];
       for (let row = 0; row < rows; row++) ledMap.push(...(await protocol.ledIndices(row, cols)));

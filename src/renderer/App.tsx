@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { Button, Icon, ICONS, Segmented } from "./components/ui";
+import { KEYCHRON_DEFINITIONS, VIA_DEFINITIONS } from "../shared/definitions";
 import { Palette } from "./components/Palette";
 import { KeymapView } from "./views/Keymap";
 import { LightingView } from "./views/Lighting";
@@ -191,12 +192,16 @@ function ConnectScreen() {
       ) : c.status === "unsupported" ? (
         <>
           <h1>Found {c.device?.productName || "a keyboard"}</h1>
-          <p>There's no built-in layout for it yet. Add its VIA definition file (JSON) from Keychron's website and it connects straight away.</p>
+          {c.device?.vendorId === 0x3434 ? (
+            <p>There's no built-in layout for it yet. Add its VIA definition file (JSON) from Keychron's website and it connects straight away.</p>
+          ) : (
+            <p>It isn't in VIA's keyboard library, or the library couldn't be reached. If it runs VIA firmware, add its VIA definition file (JSON) from its maker and it connects straight away.</p>
+          )}
           <div className="connect-actions">
             <Button kind="primary" onClick={() => void importFile()}>
               Add definition…
             </Button>
-            <Button onClick={() => void host.openExternal("https://www.keychron.com/pages/firmware-and-json-files-of-the-keychron-qmk-keyboards")}>Find the file</Button>
+            <Button onClick={() => void host.openExternal(c.device?.vendorId === 0x3434 ? KEYCHRON_DEFINITIONS : VIA_DEFINITIONS)}>Find the file</Button>
             <Button kind="ghost" onClick={() => void retryConnection()}>
               Look again
             </Button>
@@ -227,8 +232,8 @@ function ConnectScreen() {
         </>
       ) : (
         <>
-          <h1>Plug in your Keychron</h1>
-          <p>Connect it with a USB-C cable and set the switch on its back to cable mode. Bluetooth and 2.4 GHz can't change settings.</p>
+          <h1>Plug in your keyboard</h1>
+          <p>Any Keychron or VIA keyboard works. Connect it with a USB cable; wireless keyboards need their switch set to cable mode, since Bluetooth and 2.4 GHz can't change settings.</p>
           <div className="connect-actions">
             <Button kind="primary" onClick={() => void retryConnection()}>
               Look again
@@ -237,7 +242,7 @@ function ConnectScreen() {
               Try the demo keyboard
             </Button>
           </div>
-          <p className="muted small">Close Keychron Launcher and VIA first; only one app can talk to the keyboard at a time.</p>
+          <p className="muted small">Close Keychron Launcher, VIA and Vial first; only one app can talk to the keyboard at a time.</p>
         </>
       )}
     </div>

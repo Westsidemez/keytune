@@ -4,6 +4,7 @@ import { Page } from "../components/Workspace";
 import { Button, Card, Segmented, Toggle } from "../components/ui";
 import { host, models, setState, updateSettings, useStudio } from "../store";
 import { importFile } from "./Profiles";
+import { KEYCHRON_DEFINITIONS, VIA_DEFINITIONS } from "../../shared/definitions";
 
 export function SettingsView() {
   const settings = useStudio((s) => s.settings);
@@ -72,7 +73,7 @@ export function SettingsView() {
           )}
         </Card>
 
-        <Card title="Keyboards" subtitle="Keyboards this app knows. Add any VIA-compatible keyboard with its definition file (JSON).">
+        <Card title="Keyboards" subtitle="Keyboards this app knows. Keyboards in VIA's library are added automatically when you plug them in; add any other VIA keyboard with its definition file (JSON).">
           <ul className="model-list">
             {models()
               .list()
@@ -87,8 +88,11 @@ export function SettingsView() {
           </ul>
           <div className="row-actions">
             <Button onClick={() => void importFile()}>Add definition…</Button>
-            <Button kind="ghost" onClick={() => void host.openExternal("https://www.keychron.com/pages/firmware-and-json-files-of-the-keychron-qmk-keyboards")}>
+            <Button kind="ghost" onClick={() => void host.openExternal(KEYCHRON_DEFINITIONS)}>
               Get definitions from Keychron
+            </Button>
+            <Button kind="ghost" onClick={() => void host.openExternal(VIA_DEFINITIONS)}>
+              Browse VIA's library
             </Button>
           </div>
         </Card>

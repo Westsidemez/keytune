@@ -263,10 +263,10 @@ export class KeyboardProtocol {
     }
   }
 
-  // --- QMK RGB matrix (VIA custom channel 3) -------------------------------
+  // --- QMK lighting (VIA custom channel 3 = RGB matrix, 2 = underglow, 1 = backlight) ---
 
-  async rgbValue(valueId: number): Promise<number[]> {
-    const r = await this.transport.request([VIA.CUSTOM_GET_VALUE, RGB_MATRIX_CHANNEL, valueId], { echo: 2 });
+  async rgbValue(valueId: number, channel: number = RGB_MATRIX_CHANNEL): Promise<number[]> {
+    const r = await this.transport.request([VIA.CUSTOM_GET_VALUE, channel, valueId], { echo: 2 });
     return [r[3], r[4]];
   }
 
@@ -275,9 +275,9 @@ export class KeyboardProtocol {
    * value to flash when the save follows a single set, so each value is saved
    * on its own.
    */
-  async setRgbValue(valueId: number, data: number[], persist = true): Promise<void> {
-    await this.transport.request([VIA.CUSTOM_SET_VALUE, RGB_MATRIX_CHANNEL, valueId, ...data], { echo: 2 });
-    if (persist) await this.transport.request([VIA.CUSTOM_SAVE, RGB_MATRIX_CHANNEL, valueId], { echo: 2 });
+  async setRgbValue(valueId: number, data: number[], persist = true, channel: number = RGB_MATRIX_CHANNEL): Promise<void> {
+    await this.transport.request([VIA.CUSTOM_SET_VALUE, channel, valueId, ...data], { echo: 2 });
+    if (persist) await this.transport.request([VIA.CUSTOM_SAVE, channel, valueId], { echo: 2 });
   }
 
   // --- Keychron extensions ---------------------------------------------------

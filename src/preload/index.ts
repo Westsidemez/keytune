@@ -12,6 +12,7 @@ const host: StudioHost = {
   exportJson: (name, data) => ipcRenderer.invoke("file:export", name, data),
   importJson: () => ipcRenderer.invoke("file:import"),
   chooseFile: () => ipcRenderer.invoke("file:choose"),
+  fetchViaDefinition: (vendorId: number, productId: number) => ipcRenderer.invoke("definitions:fetchVia", vendorId, productId),
   appMacroStatus: () => ipcRenderer.invoke("appMacros:status"),
   requestAccessibility: () => ipcRenderer.invoke("appMacros:requestAccess"),
   runAppMacro: (id) => ipcRenderer.invoke("appMacros:run", id),

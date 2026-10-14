@@ -223,6 +223,8 @@ let activeDevice: HIDDevice | null = null;
 let activeLink: WebHidLink | null = null;
 let connecting = false;
 const ignored = new Set<string>();
+/** Keyboards already looked up in VIA's library this session. */
+const lookedUp = new Set<string>();
 
 export function models(): ModelRegistry {
   return registry;
@@ -258,20 +260,29 @@ async function findKeyboard(scan = false): Promise<void> {
   try {
     if (scan) await host.scanDevices();
     const devices = (await rawHidDevices()).filter((d) => !ignored.has(deviceKey(d)));
-    const known = devices.find((d) => registry.find(d.vendorId, d.productId));
-    const candidate = known ?? devices.find((d) => d.vendorId === 0x3434);
+    // A keyboard with a known layout first, then any Keychron, then any other VIA keyboard.
+    const candidate = devices.find((d) => registry.find(d.vendorId, d.productId)) ?? devices.find((d) => d.vendorId === 0x3434) ?? devices[0];
     if (!candidate) {
       if (state.connection.status !== "searching") setState({ connection: { status: "searching" } });
       return;
     }
-    const model = registry.find(candidate.vendorId, candidate.productId);
+    const identity = { vendorId: candidate.vendorId, productId: candidate.productId, productName: candidate.productName };
+    let model = registry.find(candidate.vendorId, candidate.productId);
+    if (!model && !lookedUp.has(deviceKey(candidate))) {
+      lookedUp.add(deviceKey(candidate));
+      connecting = true;
+      setState({ connection: { status: "connecting", progress: 0, message: "Looking up its layout in VIA's keyboard library", device: identity } });
+      try {
+        const definition = await host.fetchViaDefinition(candidate.vendorId, candidate.productId).catch(() => null);
+        if (definition) model = await rememberDefinition(definition);
+      } catch {
+        // A definition that doesn't parse is treated like none; the user can add one by hand.
+      } finally {
+        connecting = false;
+      }
+    }
     if (!model) {
-      setState({
-        connection: {
-          status: "unsupported",
-          device: { vendorId: candidate.vendorId, productId: candidate.productId, productName: candidate.productName },
-        },
-      });
+      setState({ connection: { status: "unsupported", device: identity } });
       return;
     }
     await connectDevice(candidate, model);
@@ -282,16 +293,22 @@ async function findKeyboard(scan = false): Promise<void> {
 
 export async function retryConnection(): Promise<void> {
   ignored.clear();
+  lookedUp.clear();
   setState({ connection: { status: "searching" } });
   await findKeyboard(true);
 }
 
 /** Register an imported VIA definition and connect if it matches the waiting keyboard. */
 export async function addDefinition(definition: unknown): Promise<KeyboardModel> {
+  const model = await rememberDefinition(definition);
+  if (state.connection.status === "unsupported") await retryConnection();
+  return model;
+}
+
+async function rememberDefinition(definition: unknown): Promise<KeyboardModel> {
   const model = registry.add(definition);
   const definitions = [...state.settings.definitions.filter((d) => !(d.vendorId === model.definition.vendorId && d.productId === model.definition.productId)), model.definition];
   await updateSettings({ definitions });
-  if (state.connection.status === "unsupported") await retryConnection();
   return model;
 }
 
@@ -469,6 +486,7 @@ function browserHost(): StudioHost {
     exportJson: async () => false,
     importJson: async () => null,
     chooseFile: async () => null,
+    fetchViaDefinition: async () => null,
     appMacroStatus: async () => ({ accessibility: "not-needed", registered: 0, failed: [] }),
     requestAccessibility: async () => ({ accessibility: "not-needed", registered: 0, failed: [] }),
     runAppMacro: async () => undefined,

@@ -1,6 +1,6 @@
 // Electron main process: window, menu bar, HID permissions, storage and app macros.
 
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, shell, Tray, session, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, shell, Tray, session, type MenuItemConstructorOptions } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { Storage } from "./storage";
@@ -209,6 +209,7 @@ function setupIpc(): void {
     const result = await dialog.showOpenDialog(window!, { title: "Choose what to open", buttonLabel: "Choose", properties: ["openFile", "openDirectory"] });
     return result.canceled ? null : (result.filePaths[0] ?? null);
   });
+  ipcMain.handle("definitions:fetchVia", (_e, vendorId: number, productId: number) => fetchViaDefinition(vendorId, productId));
   ipcMain.handle("appMacros:status", () => runner.status());
   ipcMain.handle("appMacros:requestAccess", () => runner.requestAccessibility());
   ipcMain.handle("appMacros:run", (_e, id: string) => runner.run(id, 0));
@@ -227,6 +228,28 @@ function setupIpc(): void {
     if (!/^https:\/\//.test(url)) throw new Error("Only https links can be opened");
     return shell.openExternal(url);
   });
+}
+
+/**
+ * VIA's online library serves every keyboard it supports as /definitions/<v3|v2>/<vendorProductId>.json.
+ * Unknown ids fall through to the web app's HTML page, so anything that isn't a JSON definition means "none".
+ */
+async function fetchViaDefinition(vendorId: number, productId: number): Promise<unknown | null> {
+  if (!Number.isInteger(vendorId) || !Number.isInteger(productId) || vendorId < 0 || vendorId > 0xffff || productId < 0 || productId > 0xffff) return null;
+  const id = vendorId * 0x10000 + productId;
+  for (const version of ["v3", "v2"]) {
+    try {
+      const response = await net.fetch(`https://www.usevia.app/definitions/${version}/${id}.json`, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) continue;
+      const text = await response.text();
+      if (text.length > 5_000_000 || !text.trimStart().startsWith("{")) continue;
+      const data = JSON.parse(text) as { vendorProductId?: unknown; matrix?: unknown };
+      if (data.vendorProductId === id && data.matrix) return data;
+    } catch {
+      // Offline or unreachable: the user can still add the file by hand.
+    }
+  }
+  return null;
 }
 
 /** Newest "*macro*.json" in Downloads from the last 30 days (Keychron Launcher exports "<Keyboard> Macro.json"). */

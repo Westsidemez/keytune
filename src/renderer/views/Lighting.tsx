@@ -158,10 +158,14 @@ function EffectGallery() {
     if (model.perKeyMode !== undefined && lighting.perKey) yours.push({ id: model.perKeyMode, title: "Your key colours", description: "The colours you painted on each key.", usesColour: false });
     if (model.mixedMode !== undefined && lighting.mixed) yours.push({ id: model.mixedMode, title: "Your zones", description: "Each zone plays its own effects in turn.", usesColour: false });
     yours.push({ id: 0, title: "Off", description: "All lights off.", usesColour: false });
+    const titles = new Map<string, number>();
+    for (const e of model.effects) titles.set(effectInfo(e.name).title, (titles.get(effectInfo(e.name).title) ?? 0) + 1);
     for (const e of model.effects) {
       const info = effectInfo(e.name);
       const list = byGroup.get(info.group) ?? [];
-      list.push({ id: e.id, title: info.title, description: info.description, usesColour: info.usesColour, reacts: info.group === "typing" });
+      // Two effects with the same friendly name (e.g. "Gradient Up/Down" and "Gradient Left/Right") keep the firmware's names.
+      const title = (titles.get(info.title) ?? 0) > 1 ? e.name : info.title;
+      list.push({ id: e.id, title, description: info.description, usesColour: info.usesColour, reacts: info.group === "typing" });
       byGroup.set(info.group, list);
     }
     return [
@@ -251,11 +255,15 @@ function GlobalLighting() {
       </div>
       <Card>
         <Slider label="Brightness" value={l.brightness} onPreview={(v) => void setLightingValue("brightness", v, false)} onCommit={(v, start) => void setLightingValue("brightness", v, true, start)} />
-        <Slider label="Speed" value={l.speed} disabled={l.effect === 0} onPreview={(v) => void setLightingValue("speed", v, false)} onCommit={(v, start) => void setLightingValue("speed", v, true, start)} />
+        {l.adjustable !== false && (
+          <Slider label="Speed" value={l.speed} disabled={l.effect === 0} onPreview={(v) => void setLightingValue("speed", v, false)} onCommit={(v, start) => void setLightingValue("speed", v, true, start)} />
+        )}
       </Card>
-      <Card title="Colour" subtitle={info.usesColour ? "Used by this effect" : "This effect makes its own colours; effects tagged “Your colour” use this."}>
-        <ColorPicker value={{ h: l.hue, s: l.sat, v: 255 }} showValue={false} onChange={(hsv) => void setColor(hsv, false)} onCommit={(hsv, start) => void setColor(hsv, true, start)} />
-      </Card>
+      {l.adjustable !== false && (
+        <Card title="Colour" subtitle={info.usesColour ? "Used by this effect" : "This effect makes its own colours; effects tagged “Your colour” use this."}>
+          <ColorPicker value={{ h: l.hue, s: l.sat, v: 255 }} showValue={false} onChange={(hsv) => void setColor(hsv, false)} onCommit={(hsv, start) => void setColor(hsv, true, start)} />
+        </Card>
+      )}
       <p className="muted small">Changes apply to the keyboard as you make them. Press ⌘Z to go back.</p>
     </div>
   );
