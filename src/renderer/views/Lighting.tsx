@@ -145,6 +145,8 @@ interface GalleryItem {
   reacts?: boolean;
 }
 
+const GALLERY_VIEW_KEY = "studio.effectGalleryView";
+
 function EffectGallery() {
   const kb = useStudio((s) => s.kb)!;
   const model = useStudio((s) => s.model)!;
@@ -169,9 +171,27 @@ function EffectGallery() {
   }, [model, lighting.perKey, lighting.mixed]);
 
   const previewLighting = useCallback((id: number) => ({ ...lighting, effect: id, brightness: 255 }), [lighting]);
+  const [hovered, setHovered] = useState<number | null>(null);
+  const [view, setView] = useState<"grid" | "list">(() => (localStorage.getItem(GALLERY_VIEW_KEY) === "list" ? "list" : "grid"));
+  const changeView = (v: "grid" | "list") => {
+    setView(v);
+    localStorage.setItem(GALLERY_VIEW_KEY, v);
+  };
 
   return (
-    <div className="effect-gallery">
+    <div className={`effect-gallery view-${view}`}>
+      <div className="gallery-bar">
+        <span className="muted small">Hover over an effect to see it move. Click to put it on the keyboard.</span>
+        <Segmented
+          size="small"
+          value={view}
+          onChange={changeView}
+          options={[
+            { value: "grid", label: <Icon name="grid" size={14} />, title: "Show as grid" },
+            { value: "list", label: <Icon name="list" size={14} />, title: "Show as list" },
+          ]}
+        />
+      </div>
       {groups.map((g) => (
         <section key={g.id} className="effect-group">
           <header>
@@ -184,10 +204,12 @@ function EffectGallery() {
                 key={e.id}
                 className={`effect-card${lighting.effect === e.id ? " on" : ""}`}
                 onClick={() => void setEffect(e.id)}
+                onMouseEnter={() => setHovered(e.id)}
+                onMouseLeave={() => setHovered((h) => (h === e.id ? null : h))}
                 title={e.description}
               >
                 <span className="effect-preview">
-                  {e.id === 0 ? <span className="effect-off" /> : <MiniBoard model={model} lighting={previewLighting(e.id)} ledMap={kb.ledMap} cols={kb.cols} />}
+                  {e.id === 0 ? <span className="effect-off" /> : <MiniBoard model={model} lighting={previewLighting(e.id)} ledMap={kb.ledMap} cols={kb.cols} playing={hovered === e.id} />}
                   {lighting.effect === e.id && <span className="effect-live">On keyboard</span>}
                 </span>
                 <span className="effect-text">

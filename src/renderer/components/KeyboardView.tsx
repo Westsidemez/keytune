@@ -60,8 +60,9 @@ export function KeyboardView(props: KeyboardViewProps) {
     if (!el || !layout) return;
     const resize = () => {
       // The case adds 0.32 units of padding on each side.
-      const width = el.clientWidth - 48;
-      const height = el.clientHeight - 40;
+      const style = getComputedStyle(el);
+      const width = el.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 48;
+      const height = el.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - 40;
       const byWidth = width / (layout.width + 0.64);
       const byHeight = height > 120 ? height / (layout.height + 0.64) : byWidth;
       setUnit(Math.max(26, Math.min(maxUnit, byWidth, byHeight)));

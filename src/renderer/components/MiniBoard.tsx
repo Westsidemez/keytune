@@ -1,5 +1,5 @@
-// A small animated keyboard that plays a lighting effect, for the effect gallery.
-// All boards share one animation loop and only draw while on screen.
+// A small keyboard that shows a lighting effect, for the effect gallery.
+// Boards show a still frame and only animate while \`playing\` (on hover), sharing one loop.
 
 import { useEffect, useMemo, useRef } from "react";
 import type { LightingState } from "../../shared/keyboard";
@@ -11,13 +11,14 @@ const active = new Set<Draw>();
 let frame = 0;
 let last = 0;
 const start = performance.now();
+const STILL_T = 1.7;
 const still = typeof location !== "undefined" && new URLSearchParams(location.search).has("smoke");
 
 function loop(now: number) {
   frame = active.size ? requestAnimationFrame(loop) : 0;
   if (now - last < 45) return;
   last = now;
-  const t = still ? 1.7 : (now - start) / 1000;
+  const t = still ? STILL_T : (now - start) / 1000;
   for (const draw of active) draw(t);
 }
 
@@ -27,7 +28,7 @@ function play(draw: Draw): () => void {
   return () => active.delete(draw);
 }
 
-export function MiniBoard({ model, lighting, ledMap, cols }: { model: KeyboardModel; lighting: LightingState; ledMap: (number | null)[]; cols: number }) {
+export function MiniBoard({ model, lighting, ledMap, cols, playing = false }: { model: KeyboardModel; lighting: LightingState; ledMap: (number | null)[]; cols: number; playing?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const preview = useMemo(() => createPreview({ layout: model.layout, model, lighting, ledMap, cols }), [model, lighting, ledMap, cols]);
 
@@ -37,7 +38,6 @@ export function MiniBoard({ model, lighting, ledMap, cols }: { model: KeyboardMo
     const ctx = el.getContext("2d");
     if (!ctx) return;
     const layout = model.layout;
-    let stop: (() => void) | null = null;
 
     const draw: Draw = (t) => {
       const dpr = window.devicePixelRatio || 1;
@@ -78,20 +78,19 @@ export function MiniBoard({ model, lighting, ledMap, cols }: { model: KeyboardMo
       ctx.shadowBlur = 0;
     };
 
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting && !stop) stop = play(draw);
-      else if (!entry.isIntersecting && stop) {
-        stop();
-        stop = null;
-      }
-    });
-    observer.observe(el);
-    draw(still ? 1.7 : (performance.now() - start) / 1000);
+    draw(STILL_T);
+    if (!playing || still) {
+      // The first layout may not have happened yet; draw again once the canvas has a size.
+      const observer = new ResizeObserver(() => draw(STILL_T));
+      observer.observe(el);
+      return () => observer.disconnect();
+    }
+    const stop = play(draw);
     return () => {
-      observer.disconnect();
-      stop?.();
+      stop();
+      draw(STILL_T);
     };
-  }, [preview, model]);
+  }, [preview, model, playing]);
 
   return <canvas ref={canvas} className="mini-board" />;
 }

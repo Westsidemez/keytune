@@ -1,10 +1,11 @@
 // Macros: a library of onboard and app macros, a step editor (or code), and a key palette.
 // Layout follows Keychron Launcher: library on the left, editor in the middle, keys on the right.
+// Onboard and app macros share one editor; app macros add Open and Command steps but can't hold keys.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { actionsToSteps, decodeMacroSteps, encodeMacroSteps, macroBufferBytes, untypeableCharacters, type MacroAction, type MacroStep } from "../../shared/macros";
-import { describe, isModifierKey, kc, keycodeName, macroKey } from "../../shared/keycodes";
-import { describeAppAction, newAppMacro, SHORTCUT_KEYS, triggerAccelerator, type AppMacro, type AppMacroAction, type ShortcutMod } from "../../shared/appMacros";
+import { describe, isModifierKey, kc, keycodeName, macroKey, type Platform } from "../../shared/keycodes";
+import { newAppMacro, SHORTCUT_KEYS, triggerAccelerator, type AppMacro, type AppMacroAction, type ShortcutMod } from "../../shared/appMacros";
 import { macroToViaText, parseProfile, profileMacroData, viaTextToMacro } from "../../shared/profile";
 import { parseMacroFile, toLauncherMacros, type ImportedMacros } from "../../shared/launcherMacros";
 import type { LayoutKey } from "../../shared/layout";
@@ -18,12 +19,17 @@ import { hidCodeFor } from "../hidCodes";
 import { keyLabel, labelContext } from "../labels";
 
 type Selected = { kind: "onboard"; index: number } | { kind: "app"; id: string };
+type Mode = "onboard" | "app";
 type DelayMode = "none" | "recorded" | "fixed";
 type AddKind = "tap" | "down" | "up";
 type Tab = "steps" | "code";
+/** A step in the editor: an onboard macro step, or one of the app-only steps. */
+type EStep = MacroStep | { type: "open"; target: string } | { type: "shell"; command: string };
 
 const LIBRARY_LAYOUT_KEY = "studio.macroLibraryLayout";
 const DOWNLOAD_SEEN_KEY = "studio.macroDownloadSeen";
+
+const hasKey = (s: EStep | undefined): s is Extract<MacroStep, { key: number }> => !!s && (s.type === "tap" || s.type === "down" || s.type === "up" || s.type === "shortcut");
 
 export function MacrosView() {
   const kb = useStudio((s) => s.kb)!;
@@ -32,20 +38,12 @@ export function MacrosView() {
   const appMacros = useStudio((s) => s.settings.appMacros);
   const [selected, setSelected] = useState<Selected>(kb.macros.count ? { kind: "onboard", index: 0 } : { kind: "app", id: appMacros[0]?.id ?? "" });
   const [drafts, setDrafts] = useState<Map<number, MacroStep[]>>(new Map());
-  const [active, setActive] = useState<number | null>(null);
-  const [addKind, setAddKind] = useState<AddKind>("tap");
   const [tab, setTab] = useState<Tab>("steps");
-  const codeInsert = useRef<((text: string) => void) | null>(null);
 
   const stepsFor = (i: number) => drafts.get(i) ?? decodeMacroSteps(kb.macros.data[i] ?? new Uint8Array());
   const encoded = useMemo(() => kb.macros.data.map((d, i) => (drafts.has(i) ? encodeMacroSteps(drafts.get(i)!) : d)), [kb.macros.data, drafts]);
   const used = macroBufferBytes(encoded);
   const setSteps = (i: number, steps: MacroStep[]) => setDrafts((d) => new Map(d).set(i, steps));
-
-  const select = (s: Selected) => {
-    setSelected(s);
-    setActive(null);
-  };
 
   const save = async () => {
     if (used > kb.macros.bufferSize) {
@@ -83,7 +81,7 @@ export function MacrosView() {
         (result.unknown.length ? ` Skipped unknown keys: ${result.unknown.slice(0, 4).join(", ")}.` : ""),
       result.unknown.length || extra ? "error" : "success",
     );
-    select({ kind: "onboard", index: Math.max(0, result.macros.findIndex((m) => m.length)) });
+    setSelected({ kind: "onboard", index: Math.max(0, result.macros.findIndex((m) => m.length)) });
     setTab("steps");
   };
 
@@ -100,37 +98,10 @@ export function MacrosView() {
     await host.exportJson(`${kb.info.productName} Macro.json`, toLauncherMacros(encoded)).catch((e) => toast(errorMessage(e), "error"));
   };
 
-  const steps = selected.kind === "onboard" ? stepsFor(selected.index) : [];
-  const activeStep = selected.kind === "onboard" && active !== null ? steps[active] : undefined;
-  const editsKey = !!activeStep && "key" in activeStep;
-
-  /** A key clicked in the palette: edit the active step, insert into code, or add a new step. */
-  const pickKey = (code: number) => {
-    if (selected.kind === "app") return pickAppKey(selected.id, code, active, setActive);
-    if (tab === "code") {
-      const name = keycodeName(code);
-      codeInsert.current?.(addKind === "tap" ? `{${name}}` : `{${addKind === "down" ? "+" : "-"}${name}}`);
-      return;
-    }
-    if (editsKey) {
-      setSteps(selected.index, steps.map((s, i) => (i === active ? ({ ...s, key: code } as MacroStep) : s)));
-      return;
-    }
-    setSteps(selected.index, [...steps, { type: addKind, key: code }]);
-  };
-
   const selectedKey = selection?.kind === "key" ? model.layout.keys.find((k) => k.id === selection.id) : undefined;
-  const currentCode = selected.kind === "onboard" ? macroKey(selected.index) : appMacros.find((m) => m.id === selected.id)?.trigger;
-  const paletteHint =
-    selected.kind === "app"
-      ? active !== null
-        ? `Sets the key of step ${active + 1}`
-        : "Click a key to add a key press"
-      : tab === "code"
-        ? "Inserts the key's code at the cursor"
-        : editsKey
-          ? `Changes the key in step ${active! + 1}`
-          : undefined;
+  const appMacro = selected.kind === "app" ? appMacros.find((m) => m.id === selected.id) : undefined;
+  const currentCode = selected.kind === "onboard" ? macroKey(selected.index) : appMacro?.trigger;
+  const shared = { tab, setTab, onSelect: setSelected, selectedKey };
 
   return (
     <Workspace
@@ -149,7 +120,7 @@ export function MacrosView() {
         <div className="macro-studio">
           <MacroLibrary
             selected={selected}
-            onSelect={select}
+            onSelect={setSelected}
             stepsFor={stepsFor}
             drafts={drafts}
             used={used}
@@ -158,48 +129,131 @@ export function MacrosView() {
             onExport={exportFile}
             onClear={(i) => setSteps(i, [])}
           />
-          <section className="macro-editor">
-            {selected.kind === "onboard" && selected.index < kb.macros.count ? (
-              <OnboardEditor
-                index={selected.index}
-                steps={steps}
-                dirty={drafts.size > 0}
-                thisDirty={drafts.has(selected.index)}
-                onChange={(next) => setSteps(selected.index, next)}
-                onRevert={() =>
-                  setDrafts((d) => {
-                    const next = new Map(d);
-                    next.delete(selected.index);
-                    return next;
-                  })
-                }
-                onSelect={select}
-                active={active}
-                setActive={setActive}
-                tab={tab}
-                setTab={setTab}
-                codeInsert={codeInsert}
-                onSave={save}
-                selectedKey={selectedKey}
-              />
-            ) : selected.kind === "app" && appMacros.some((m) => m.id === selected.id) ? (
-              <AppMacroEditor key={selected.id} macro={appMacros.find((m) => m.id === selected.id)!} onSelect={select} active={active} setActive={setActive} selectedKey={selectedKey} />
-            ) : (
-              <Empty title="Choose a macro" icon="macros">
-                Pick a slot on the left, or create an app macro.
-              </Empty>
-            )}
-          </section>
-          <KeyPalette onPick={pickKey} addKind={addKind} setAddKind={setAddKind} hint={paletteHint} showKind={selected.kind === "onboard" && !editsKey} />
+          {selected.kind === "onboard" && selected.index < kb.macros.count ? (
+            <Workbench
+              key={`o${selected.index}`}
+              mode="onboard"
+              selected={selected}
+              steps={stepsFor(selected.index)}
+              onChange={(next) => setSteps(selected.index, next as MacroStep[])}
+              code={macroKey(selected.index)}
+              title={macroNames()[selected.index] ?? ""}
+              onRename={(name) => void setMacroName(selected.index, name)}
+              footer={
+                <>
+                  {drafts.has(selected.index) && (
+                    <Button
+                      kind="ghost"
+                      onClick={() =>
+                        setDrafts((d) => {
+                          const next = new Map(d);
+                          next.delete(selected.index);
+                          return next;
+                        })
+                      }
+                    >
+                      Revert
+                    </Button>
+                  )}
+                  <Button kind="primary" disabled={!drafts.size} onClick={save}>
+                    Save to keyboard
+                  </Button>
+                </>
+              }
+              {...shared}
+            />
+          ) : appMacro ? (
+            <AppWorkbench key={`a${appMacro.id}`} macro={appMacro} {...shared} />
+          ) : (
+            <>
+              <section className="macro-editor">
+                <Empty title="Choose a macro" icon="macros">
+                  Pick a slot on the left, or create an app macro.
+                </Empty>
+              </section>
+              <section className="key-palette" />
+            </>
+          )}
         </div>
       }
     />
   );
 }
 
-// --- library ------------------------------------------------------------------------------
+// --- key caps (compact summaries) -------------------------------------------------------------
 
-function stepLabel(step: MacroStep): string {
+const MAC_MOD: Record<number, string> = { 0xe0: "⌃", 0xe1: "⇧", 0xe2: "⌥", 0xe3: "⌘", 0xe4: "R⌃", 0xe5: "R⇧", 0xe6: "R⌥", 0xe7: "R⌘" };
+const WIN_MOD: Record<number, string> = { 0xe0: "Ctrl", 0xe1: "Shift", 0xe2: "Alt", 0xe3: "Win", 0xe4: "RCtrl", 0xe5: "RShift", 0xe6: "RAlt", 0xe7: "RWin" };
+const SYMBOL: Record<string, string> = { ENT: "⏎", BSPC: "⌫", DEL: "⌦", TAB: "⇥", ESC: "Esc", SPC: "Space", CAPS: "⇪", LEFT: "←", RGHT: "→", UP: "↑", DOWN: "↓" };
+
+/** The shortest readable legend for a key, e.g. ⌘, ⏎, \\, F13. */
+function capLabel(code: number, platform: Platform): string {
+  if (isModifierKey(code)) return (platform === "win" ? WIN_MOD : MAC_MOD)[code] ?? describe(code, { platform }).label;
+  const name = keycodeName(code).replace(/^KC_/, "");
+  if (SYMBOL[name]) return SYMBOL[name];
+  const label = describe(code, { platform }).label;
+  const pair = /^(\S{1,2}) \S{1,2}$/.exec(label);
+  return pair ? pair[1] : label;
+}
+
+type CapGroup = { kind: "keys"; keys: string[]; held?: boolean } | { kind: "text"; text: string } | { kind: "open" } | { kind: "shell" };
+
+function capGroups(steps: EStep[], platform: Platform): CapGroup[] {
+  const groups: CapGroup[] = [];
+  let holding: Extract<CapGroup, { kind: "keys" }> | null = null;
+  for (const s of steps) {
+    if (s.type === "down") {
+      if (!holding) groups.push((holding = { kind: "keys", keys: [], held: true }));
+      holding.keys.push(capLabel(s.key, platform));
+      continue;
+    }
+    if (s.type === "up") {
+      holding = null;
+      continue;
+    }
+    if (s.type === "delay" || s.type === "raw") continue;
+    holding = null;
+    if (s.type === "tap") groups.push({ kind: "keys", keys: [capLabel(s.key, platform)] });
+    else if (s.type === "shortcut") groups.push({ kind: "keys", keys: [...s.mods, s.key].map((k) => capLabel(k, platform)) });
+    else if (s.type === "text") groups.push({ kind: "text", text: s.text });
+    else groups.push({ kind: s.type });
+  }
+  return groups;
+}
+
+function KeyCaps({ steps, max = 3 }: { steps: EStep[]; max?: number }) {
+  const platform = useStudio((s) => labelContext(s).platform ?? "mac");
+  const groups = capGroups(steps, platform);
+  if (!groups.length) return <span className="caps-empty">Empty</span>;
+  return (
+    <span className="caps">
+      {groups.slice(0, max).map((g, i) => (
+        <span key={i} className="cap-group">
+          {g.kind === "keys" &&
+            g.keys.map((k, j) => (
+              <kbd key={j} className={`kcap${g.held ? " held" : ""}`}>
+                {k}
+              </kbd>
+            ))}
+          {g.kind === "text" && <span className="cap-text">“{g.text.length > 12 ? `${g.text.slice(0, 12)}…` : g.text}”</span>}
+          {g.kind === "open" && (
+            <kbd className="kcap">
+              <Icon name="open" size={10} />
+            </kbd>
+          )}
+          {g.kind === "shell" && (
+            <kbd className="kcap">
+              <Icon name="terminal" size={10} />
+            </kbd>
+          )}
+        </span>
+      ))}
+      {groups.length > max && <span className="cap-more">+{groups.length - max}</span>}
+    </span>
+  );
+}
+
+function stepLabel(step: EStep): string {
   const name = (k: number) => describe(k).label;
   switch (step.type) {
     case "text":
@@ -216,10 +270,14 @@ function stepLabel(step: MacroStep): string {
       return `${step.ms} ms`;
     case "raw":
       return "…";
+    case "open":
+      return `Open ${step.target}`;
+    case "shell":
+      return `Run ${step.command}`;
   }
 }
 
-const summary = (steps: MacroStep[]) => (steps.length ? steps.slice(0, 3).map(stepLabel).join(" · ") + (steps.length > 3 ? " …" : "") : "Empty");
+// --- library ------------------------------------------------------------------------------
 
 function MacroLibrary({
   selected,
@@ -245,7 +303,7 @@ function MacroLibrary({
   const kb = useStudio((s) => s.kb)!;
   const appMacros = useStudio((s) => s.settings.appMacros);
   const names = useStudio(() => macroNames());
-  const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem(LIBRARY_LAYOUT_KEY) === "grid" ? "grid" : "list"));
+  const [layout, setLayout] = useState<"list" | "grid">(() => (localStorage.getItem(LIBRARY_LAYOUT_KEY) === "list" ? "list" : "grid"));
   const [download, setDownload] = useState<{ name: string; modified: number; data: unknown } | null>(null);
 
   useEffect(() => {
@@ -340,7 +398,12 @@ function MacroLibrary({
             const steps = stepsFor(i);
             const on = selected.kind === "onboard" && selected.index === i;
             return (
-              <li key={i} className={`slot-item${on ? " on" : ""}${steps.length ? "" : " blank"}`} onClick={() => onSelect({ kind: "onboard", index: i })} title={layout === "grid" ? (names[i] ?? summary(steps)) : undefined}>
+              <li
+                key={i}
+                className={`slot-item${on ? " on" : ""}${steps.length ? "" : " blank"}`}
+                onClick={() => onSelect({ kind: "onboard", index: i })}
+                title={layout === "grid" ? [names[i], steps.map(stepLabel).join(" · ")].filter(Boolean).join("\n") || "Empty" : undefined}
+              >
                 <span className="slot-badge">
                   M{String(i).padStart(2, "0")}
                   {drafts.has(i) && <span className="dot-dirty" title="Not saved to the keyboard yet" />}
@@ -349,7 +412,7 @@ function MacroLibrary({
                   <>
                     <span className="slot-text">
                       <NameInput index={i} value={names[i] ?? ""} />
-                      <small>{summary(steps)}</small>
+                      <KeyCaps steps={steps} max={4} />
                     </span>
                     <button
                       className="icon-btn danger"
@@ -364,7 +427,10 @@ function MacroLibrary({
                     </button>
                   </>
                 ) : (
-                  <span className="slot-grid-name">{names[i] ?? (steps.length ? summary(steps) : "Empty")}</span>
+                  <span className="slot-grid-body">
+                    <KeyCaps steps={steps} max={1} />
+                    {names[i] && <small className="slot-grid-name">{names[i]}</small>}
+                  </span>
                 )}
               </li>
             );
@@ -374,21 +440,27 @@ function MacroLibrary({
           App macros <small>unlimited, need this app</small>
         </span>
         <ul className={`slots slots-${layout}`}>
-          {appMacros.map((m) => (
-            <li key={m.id} className={`slot-item${selected.kind === "app" && selected.id === m.id ? " on" : ""}`} onClick={() => onSelect({ kind: "app", id: m.id })} title={layout === "grid" ? m.name : undefined}>
-              <span className="slot-badge app">
-                <Icon name="bolt" size={14} />
-              </span>
-              {layout === "list" ? (
-                <span className="slot-text">
-                  <strong>{m.name}</strong>
-                  <small>{m.actions.length ? m.actions.slice(0, 2).map(describeAppAction).join(" · ") : "Empty"}</small>
+          {appMacros.map((m) => {
+            const steps = appToSteps(m.actions);
+            return (
+              <li key={m.id} className={`slot-item${selected.kind === "app" && selected.id === m.id ? " on" : ""}${steps.length ? "" : " blank"}`} onClick={() => onSelect({ kind: "app", id: m.id })} title={layout === "grid" ? m.name : undefined}>
+                <span className="slot-badge is-app">
+                  <Icon name="bolt" size={14} />
                 </span>
-              ) : (
-                <span className="slot-grid-name">{m.name}</span>
-              )}
-            </li>
-          ))}
+                {layout === "list" ? (
+                  <span className="slot-text">
+                    <strong>{m.name}</strong>
+                    <KeyCaps steps={steps} max={4} />
+                  </span>
+                ) : (
+                  <span className="slot-grid-body">
+                    <KeyCaps steps={steps} max={1} />
+                    <small className="slot-grid-name">{m.name}</small>
+                  </span>
+                )}
+              </li>
+            );
+          })}
           <li className="slot-item new" onClick={() => void create()}>
             <span className="slot-badge new">
               <Icon name="plus" size={14} />
@@ -399,7 +471,9 @@ function MacroLibrary({
                 <small>Any text, open apps, run commands</small>
               </span>
             ) : (
-              <span className="slot-grid-name">New</span>
+              <span className="slot-grid-body">
+                <small className="slot-grid-name">New</small>
+              </span>
             )}
           </li>
         </ul>
@@ -421,16 +495,21 @@ function MacroLibrary({
 }
 
 function NameInput({ index, value }: { index: number; value: string }) {
+  return <CommitInput className="slot-name" placeholder="Custom title (optional)" value={value} onCommit={(name) => void setMacroName(index, name)} stopClicks />;
+}
+
+/** A text field that commits on blur or Enter. */
+function CommitInput({ value, onCommit, className, placeholder, stopClicks }: { value: string; onCommit: (v: string) => void; className?: string; placeholder?: string; stopClicks?: boolean }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
   return (
     <input
-      className="slot-name"
-      placeholder="Custom title (optional)"
+      className={className}
+      placeholder={placeholder}
       value={draft}
-      onClick={(e) => e.stopPropagation()}
+      onClick={stopClicks ? (e) => e.stopPropagation() : undefined}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => draft !== value && void setMacroName(index, draft)}
+      onBlur={() => draft !== value && onCommit(draft)}
       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
     />
   );
@@ -467,7 +546,7 @@ function MacroSwitcher({ selected, onSelect }: { selected: Selected; onSelect: (
   );
 }
 
-// --- onboard editor --------------------------------------------------------------------------
+// --- recording --------------------------------------------------------------------------------
 
 const LETTERS = "abcdefghijklmnopqrstuvwxyz";
 const DIGITS = "1234567890";
@@ -552,56 +631,230 @@ function useRecorder(delayMode: DelayMode, fixedMs: number, onDone: (steps: Macr
   };
 }
 
-const STEP_ICON: Record<MacroStep["type"], keyof typeof ICONS> = { tap: "keyTap", down: "keyDown", up: "keyUp", shortcut: "combo", text: "text", delay: "clock", raw: "code" };
-const STEP_KIND: Record<MacroStep["type"], string> = { tap: "Tap", down: "Hold", up: "Release", shortcut: "Shortcut", text: "Type", delay: "Wait", raw: "Data" };
+// --- app macro <-> editor steps ---------------------------------------------------------------
 
-const ADD_STEPS: { label: string; icon: keyof typeof ICONS; title: string; make: () => MacroStep }[] = [
-  { label: "Tap", icon: "keyTap", title: "Press and release a key", make: () => ({ type: "tap", key: kc("ENT") }) },
-  { label: "Hold", icon: "keyDown", title: "Press a key and keep it down", make: () => ({ type: "down", key: kc("LSFT") }) },
-  { label: "Release", icon: "keyUp", title: "Let go of a held key", make: () => ({ type: "up", key: kc("LSFT") }) },
-  { label: "Shortcut", icon: "combo", title: "Modifiers held around one key, e.g. ⌘C", make: () => ({ type: "shortcut", mods: [kc("LGUI")], key: kc("C") }) },
-  { label: "Text", icon: "text", title: "Type some text", make: () => ({ type: "text", text: "" }) },
-  { label: "Wait", icon: "clock", title: "Pause before the next step", make: () => ({ type: "delay", ms: 100 }) },
-];
+/** HID usage → the key names app macro shortcuts use. */
+const HID_TO_APP_KEY: Record<number, string> = (() => {
+  const map: Record<number, string> = {};
+  for (let i = 0; i < 26; i++) map[0x04 + i] = LETTERS[i];
+  for (let i = 0; i < 10; i++) map[0x1e + i] = DIGITS[i];
+  for (let i = 0; i < 12; i++) map[0x3a + i] = `f${i + 1}`;
+  for (let i = 0; i < 12; i++) map[0x68 + i] = `f${i + 13}`;
+  const named: [string, string][] = [
+    ["ENT", "return"],
+    ["ESC", "escape"],
+    ["BSPC", "delete"],
+    ["TAB", "tab"],
+    ["SPC", "space"],
+    ["MINS", "-"],
+    ["EQL", "="],
+    ["LBRC", "["],
+    ["RBRC", "]"],
+    ["BSLS", "\\"],
+    ["SCLN", ";"],
+    ["QUOT", "'"],
+    ["GRV", "`"],
+    ["COMM", ","],
+    ["DOT", "."],
+    ["SLSH", "/"],
+    ["HOME", "home"],
+    ["PGUP", "pageup"],
+    ["DEL", "forwarddelete"],
+    ["END", "end"],
+    ["PGDN", "pagedown"],
+    ["RGHT", "right"],
+    ["LEFT", "left"],
+    ["DOWN", "down"],
+    ["UP", "up"],
+  ];
+  for (const [qmk, name] of named) map[kc(qmk)] = name;
+  for (const code of Object.keys(map)) if (!SHORTCUT_KEYS.includes(map[Number(code)])) delete map[Number(code)];
+  return map;
+})();
+const APP_KEY_TO_HID: Record<string, number> = Object.fromEntries(Object.entries(HID_TO_APP_KEY).map(([code, name]) => [name, Number(code)]));
+const APP_KEY_CODES = Object.keys(HID_TO_APP_KEY).map(Number);
 
-function OnboardEditor({
-  index,
-  steps,
-  dirty,
-  thisDirty,
-  onChange,
-  onRevert,
-  onSelect,
-  active,
-  setActive,
-  tab,
-  setTab,
-  codeInsert,
-  onSave,
-  selectedKey,
-}: {
-  index: number;
-  steps: MacroStep[];
-  dirty: boolean;
-  thisDirty: boolean;
-  onChange: (s: MacroStep[]) => void;
-  onRevert: () => void;
-  onSelect: (s: Selected) => void;
-  active: number | null;
-  setActive: (i: number | null) => void;
+const MOD_FOR_HID: Record<number, ShortcutMod> = { 0xe0: "ctrl", 0xe4: "ctrl", 0xe1: "shift", 0xe5: "shift", 0xe2: "alt", 0xe6: "alt", 0xe3: "cmd", 0xe7: "cmd" };
+const HID_FOR_MOD: Record<ShortcutMod, number> = { ctrl: 0xe0, shift: 0xe1, alt: 0xe2, cmd: 0xe3 };
+
+function appToSteps(actions: AppMacroAction[]): EStep[] {
+  return actions.map((a): EStep => {
+    if (a.type !== "shortcut") return a;
+    const key = APP_KEY_TO_HID[a.key] ?? kc("A");
+    return a.mods.length ? { type: "shortcut", mods: a.mods.map((m) => HID_FOR_MOD[m]), key } : { type: "tap", key };
+  });
+}
+
+function stepsToApp(steps: EStep[]): AppMacroAction[] {
+  const out: AppMacroAction[] = [];
+  for (const s of steps) {
+    if (s.type === "tap" || s.type === "shortcut") {
+      const key = HID_TO_APP_KEY[s.key];
+      if (!key) continue;
+      const mods = s.type === "shortcut" ? [...new Set(s.mods.map((m) => MOD_FOR_HID[m]).filter(Boolean))] : [];
+      out.push({ type: "shortcut", mods, key });
+    } else if (s.type === "text" || s.type === "delay" || s.type === "open" || s.type === "shell") out.push(s);
+  }
+  return out;
+}
+
+/** Steps the app can run: holds and releases become taps where possible, the rest are dropped. */
+function forApp(steps: MacroStep[]): { steps: EStep[]; dropped: number } {
+  let dropped = 0;
+  const out: EStep[] = [];
+  for (const s of steps) {
+    if ((s.type === "tap" || s.type === "shortcut") && HID_TO_APP_KEY[s.key]) out.push(s);
+    else if (s.type === "text" || s.type === "delay") out.push(s);
+    else dropped++;
+  }
+  return { steps: out, dropped };
+}
+
+/** App macro editor host: edits locally and saves to settings shortly after each change. */
+function AppWorkbench({ macro, ...shared }: { macro: AppMacro } & SharedProps) {
+  const appMacros = useStudio((s) => s.settings.appMacros);
+  const status = useStudio((s) => s.appMacroStatus);
+  const [steps, setSteps] = useState<EStep[]>(() => appToSteps(macro.actions));
+  const pending = useRef<EStep[] | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+
+  const flush = async () => {
+    window.clearTimeout(timer.current);
+    if (!pending.current) return;
+    const actions = stepsToApp(pending.current);
+    pending.current = null;
+    await updateSettings({ appMacros: getState().settings.appMacros.map((m) => (m.id === macro.id ? { ...m, actions } : m)) });
+  };
+  useEffect(() => () => void flush(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const onChange = (next: EStep[]) => {
+    setSteps(next);
+    pending.current = next;
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => void flush(), 400);
+  };
+  const failed = status?.failed.find((f) => f.id === macro.id);
+
+  return (
+    <Workbench
+      mode="app"
+      selected={{ kind: "app", id: macro.id }}
+      steps={steps}
+      onChange={onChange}
+      code={macro.trigger}
+      title={macro.name}
+      onRename={(name) => name.trim() && void updateSettings({ appMacros: appMacros.map((m) => (m.id === macro.id ? { ...m, name: name.trim() } : m)) })}
+      banners={
+        <>
+          {failed && <p className="banner warn">Another app already uses this macro's trigger ({failed.accelerator}). Delete and recreate the macro to get a free one.</p>}
+          {status?.accessibility === "denied" && (
+            <p className="banner warn">
+              macOS needs to allow Keychron Studio under Privacy & Security → Accessibility before it can type or press keys.{" "}
+              <Button small onClick={() => void host.requestAccessibility().then((st) => setState({ appMacroStatus: st }))}>
+                Allow access…
+              </Button>
+            </p>
+          )}
+        </>
+      }
+      note={`The key sends ${triggerAccelerator(macro.trigger).replace(/\+/g, " + ")}, which this app turns into these steps while it runs (it can stay in the menu bar). App macros press keys as taps and shortcuts; they can't hold a key down.`}
+      footer={
+        <>
+          <Button
+            kind="ghost"
+            onClick={() => {
+              if (!window.confirm(`Delete “${macro.name}”? Keys set to it will stop working.`)) return;
+              pending.current = null;
+              void updateSettings({ appMacros: appMacros.filter((m) => m.id !== macro.id) });
+              shared.onSelect({ kind: "onboard", index: 0 });
+            }}
+          >
+            Delete
+          </Button>
+          <Button
+            disabled={!steps.length}
+            onClick={async () => {
+              await flush();
+              await host.runAppMacro(macro.id).catch((e) => toast(errorMessage(e), "error"));
+            }}
+          >
+            <Icon name="play" size={13} /> Test run
+          </Button>
+        </>
+      }
+      {...shared}
+    />
+  );
+}
+
+// --- the editor + key palette -----------------------------------------------------------------
+
+interface SharedProps {
   tab: Tab;
   setTab: (t: Tab) => void;
-  codeInsert: React.MutableRefObject<((text: string) => void) | null>;
-  onSave: () => void;
+  onSelect: (s: Selected) => void;
   selectedKey?: LayoutKey;
-}) {
+}
+
+const STEP_ICON: Record<EStep["type"], keyof typeof ICONS> = { tap: "keyTap", down: "keyDown", up: "keyUp", shortcut: "combo", text: "text", delay: "clock", raw: "code", open: "open", shell: "terminal" };
+const STEP_KIND: Record<EStep["type"], string> = { tap: "Tap", down: "Hold", up: "Release", shortcut: "Shortcut", text: "Type", delay: "Wait", raw: "Data", open: "Open", shell: "Command" };
+
+const ADD_STEPS: { label: string; icon: keyof typeof ICONS; title: string; modes: Mode[]; make: () => EStep }[] = [
+  { label: "Tap", icon: "keyTap", title: "Press and release a key", modes: ["onboard", "app"], make: () => ({ type: "tap", key: kc("ENT") }) },
+  { label: "Hold", icon: "keyDown", title: "Press a key and keep it down", modes: ["onboard"], make: () => ({ type: "down", key: kc("LSFT") }) },
+  { label: "Release", icon: "keyUp", title: "Let go of a held key", modes: ["onboard"], make: () => ({ type: "up", key: kc("LSFT") }) },
+  { label: "Shortcut", icon: "combo", title: "Modifiers held around one key, e.g. ⌘C", modes: ["onboard", "app"], make: () => ({ type: "shortcut", mods: [kc("LGUI")], key: kc("C") }) },
+  { label: "Text", icon: "text", title: "Type some text", modes: ["onboard", "app"], make: () => ({ type: "text", text: "" }) },
+  { label: "Wait", icon: "clock", title: "Pause before the next step", modes: ["onboard", "app"], make: () => ({ type: "delay", ms: 100 }) },
+  { label: "Open", icon: "open", title: "Open a website, file or app", modes: ["app"], make: () => ({ type: "open", target: "" }) },
+  { label: "Command", icon: "terminal", title: "Run a shell command", modes: ["app"], make: () => ({ type: "shell", command: "" }) },
+];
+
+function Workbench({
+  mode,
+  selected,
+  steps,
+  onChange,
+  code,
+  title,
+  onRename,
+  footer,
+  banners,
+  note,
+  tab,
+  setTab,
+  onSelect,
+  selectedKey,
+}: {
+  mode: Mode;
+  selected: Selected;
+  steps: EStep[];
+  onChange: (s: EStep[]) => void;
+  code: number;
+  title: string;
+  onRename: (name: string) => void;
+  footer: React.ReactNode;
+  banners?: React.ReactNode;
+  note?: string;
+} & SharedProps) {
+  const [active, setActive] = useState<number | null>(null);
   const [checked, setChecked] = useState<Set<number>>(new Set());
+  const [addKind, setAddKind] = useState<AddKind>("tap");
   const [delayMode, setDelayMode] = useState<DelayMode>("none");
   const [fixedMs, setFixedMs] = useState(50);
-  const recorder = useRecorder(delayMode, fixedMs, (recorded) => recorded.length && onChange([...steps, ...recorded]));
-  useEffect(() => setChecked(new Set()), [index]);
+  const codeInsert = useRef<((text: string) => void) | null>(null);
+  const isApp = mode === "app";
 
-  const update = (i: number, step: MacroStep) => onChange(steps.map((s, j) => (j === i ? step : s)));
+  const append = (more: MacroStep[]) => {
+    if (!more.length) return;
+    if (!isApp) return onChange([...steps, ...more]);
+    const { steps: usable, dropped } = forApp(more);
+    if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can only tap keys and shortcuts, not hold them.`);
+    onChange([...steps, ...usable]);
+  };
+  const recorder = useRecorder(delayMode, fixedMs, append);
+
+  const update = (i: number, step: EStep) => onChange(steps.map((s, j) => (j === i ? step : s)));
   const move = (i: number, d: number) => {
     const next = steps.slice();
     const [s] = next.splice(i, 1);
@@ -621,139 +874,188 @@ function OnboardEditor({
     setChecked(next);
   };
   const allChecked = steps.length > 0 && checked.size === steps.length;
+  const activeStep = active !== null ? steps[active] : undefined;
+  const editsKey = hasKey(activeStep);
+
+  /** A key clicked in the palette: insert into code, edit the active step, or add a new step. */
+  const pickKey = (key: number) => {
+    if (tab === "code") {
+      const name = keycodeName(key);
+      codeInsert.current?.(addKind === "tap" || isApp ? `{${name}}` : `{${addKind === "down" ? "+" : "-"}${name}}`);
+      return;
+    }
+    const usable = !isApp || HID_TO_APP_KEY[key] !== undefined;
+    if (editsKey && active !== null) {
+      const s = activeStep;
+      if (isModifierKey(key) && (s.type === "tap" || s.type === "shortcut")) {
+        // Modifiers clicked while a tap or shortcut is selected are added to (or removed from) it.
+        const mods = s.type === "shortcut" ? s.mods : [];
+        const next = mods.includes(key) ? mods.filter((m) => m !== key) : [...mods, key];
+        update(active, next.length ? { type: "shortcut", mods: next, key: s.key } : { type: "tap", key: s.key });
+        return;
+      }
+      if (!usable) return void toast("App macros can't press that key");
+      update(active, { ...s, key });
+      return;
+    }
+    if (isApp && isModifierKey(key)) return void toast("Select a Tap or Shortcut step first, then click modifiers to add them to it");
+    if (!usable) return void toast("App macros can't press that key");
+    onChange([...steps, { type: isApp ? "tap" : addKind, key }]);
+  };
+
+  const hint =
+    tab === "code"
+      ? "Click a key to insert its code at the cursor."
+      : editsKey && active !== null
+        ? `Changes the key in step ${active + 1}. Modifiers are added to it.`
+        : isApp
+          ? "Click a key to add it as a step."
+          : undefined;
+
+  const badge = selected.kind === "onboard" ? `M${String(selected.index).padStart(2, "0")}` : null;
+  const codeBlocked = isApp && steps.some((s) => s.type === "open" || s.type === "shell");
 
   return (
-    <div className="editor">
-      <header className="editor-top">
-        <Segmented
-          value={tab}
-          onChange={setTab}
-          options={[
-            { value: "steps", label: "Steps" },
-            { value: "code", label: "Code", title: "Write or paste a macro as code" },
-          ]}
-        />
-        <span className="spacer" />
-        <MacroSwitcher selected={{ kind: "onboard", index }} onSelect={onSelect} />
-      </header>
+    <>
+      <section className="macro-editor">
+        <div className="editor">
+          <header className="editor-top">
+            <Segmented
+              value={tab}
+              onChange={setTab}
+              options={[
+                { value: "steps", label: "Steps" },
+                { value: "code", label: "Code", title: "Write or paste a macro as code" },
+              ]}
+            />
+            <span className={`slot-badge big${badge ? " on" : " is-app"}`}>{badge ?? <Icon name="bolt" size={15} />}</span>
+            <CommitInput className="title-input" placeholder={badge ? `Name this macro (Macro ${(selected as { index: number }).index})` : "Name this macro"} value={title} onCommit={onRename} />
+            <MacroSwitcher selected={selected} onSelect={onSelect} />
+          </header>
+          {banners}
 
-      {tab === "steps" ? (
-        <div className="editor-body">
-          <aside className="record-panel">
-            <h4>Record</h4>
-            <button className={`record-btn${recorder.recording ? " on" : ""}`} onClick={recorder.recording ? recorder.stop : recorder.start}>
-              <span className="rec-dot" /> {recorder.recording ? `Stop · ${recorder.count}` : "Start recording"}
-            </button>
-            <h4>Time between keys</h4>
-            <div className="radio-list">
-              {(
-                [
-                  ["none", "No delay", "Fastest. Typed letters become text."],
-                  ["recorded", "As recorded", "Keeps your own timing."],
-                  ["fixed", "Fixed", "The same pause every time."],
-                ] as [DelayMode, string, string][]
-              ).map(([value, label, hint]) => (
-                <label key={value} className={`radio${delayMode === value ? " on" : ""}`}>
-                  <input type="radio" name="delay" checked={delayMode === value} onChange={() => setDelayMode(value)} disabled={recorder.recording} />
-                  <span>
-                    {label}
-                    <small>{hint}</small>
-                  </span>
-                </label>
-              ))}
-              {delayMode === "fixed" && (
-                <label className="fixed-ms">
-                  <input type="number" min={1} max={5000} value={fixedMs} onChange={(e) => setFixedMs(Math.max(1, Math.min(5000, Number(e.target.value) || 1)))} /> ms
-                </label>
-              )}
-            </div>
-          </aside>
-
-          <div className="steps-col">
-            <div className="steps-head">
-              <label className="check">
-                <input type="checkbox" checked={allChecked} disabled={!steps.length} onChange={() => setChecked(allChecked ? new Set() : new Set(steps.map((_, i) => i)))} />
-                Select all
-              </label>
-              <span className="muted small">
-                {steps.length} step{steps.length === 1 ? "" : "s"}
-              </span>
-              <span className="spacer" />
-              <Button small kind="ghost" disabled={!checked.size} onClick={() => remove(checked)}>
-                <Icon name="trash" size={13} /> Delete{checked.size ? ` ${checked.size}` : ""}
-              </Button>
-            </div>
-            <ol className="steps">
-              {steps.map((step, i) => (
-                <li key={i} className={`step${active === i ? " active" : ""}${checked.has(i) ? " checked" : ""}`} onClick={() => setActive(active === i ? null : i)}>
-                  <input type="checkbox" className="step-check" checked={checked.has(i)} onClick={(e) => e.stopPropagation()} onChange={() => toggleCheck(i)} />
-                  <span className="step-index">{i + 1}</span>
-                  <span className={`step-icon step-${step.type}`} title={STEP_KIND[step.type]}>
-                    <Icon name={STEP_ICON[step.type]} size={16} />
-                  </span>
-                  <div className="step-body" onClick={(e) => e.target !== e.currentTarget && e.stopPropagation()}>
-                    <StepEditor step={step} onChange={(s) => update(i, s)} />
-                  </div>
-                  <span className="step-actions" onClick={(e) => e.stopPropagation()}>
-                    <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
-                      <Icon name="up" size={14} />
-                    </button>
-                    <button className="icon-btn" disabled={i === steps.length - 1} onClick={() => move(i, 1)} title="Move down">
-                      <Icon name="down" size={14} />
-                    </button>
-                    <button className="icon-btn danger" onClick={() => remove(new Set([i]))} title="Delete step">
-                      <Icon name="trash" size={14} />
-                    </button>
-                  </span>
-                </li>
-              ))}
-              {!steps.length && !recorder.recording && <li className="steps-empty">No steps yet. Record one, add a step below, or click keys on the right.</li>}
-              {recorder.recording && (
-                <li className="recording-row">
-                  <span className="rec-dot" /> Recording. Press keys on your keyboard, then Stop. {recorder.count} events
-                </li>
-              )}
-            </ol>
-            <div className="add-steps">
-              {ADD_STEPS.map((a) => (
-                <button
-                  key={a.label}
-                  className="add-step"
-                  title={a.title}
-                  onClick={() => {
-                    onChange([...steps, a.make()]);
-                    setActive(steps.length);
-                  }}
-                >
-                  <Icon name={a.icon} size={15} />
-                  {a.label}
+          {tab === "steps" ? (
+            <div className="editor-body">
+              <aside className="record-panel">
+                <h4>Record</h4>
+                <button className={`record-btn${recorder.recording ? " on" : ""}`} onClick={recorder.recording ? recorder.stop : recorder.start}>
+                  <span className="rec-dot" /> {recorder.recording ? `Stop · ${recorder.count}` : "Start recording"}
                 </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <CodeEditor steps={steps} onApply={onChange} insertRef={codeInsert} />
-      )}
+                <h4>Time between keys</h4>
+                <div className="radio-list">
+                  {(
+                    [
+                      ["none", "No delay", "Fastest. Typed letters become text."],
+                      ["recorded", "As recorded", "Keeps your own timing."],
+                      ["fixed", "Fixed", "The same pause every time."],
+                    ] as [DelayMode, string, string][]
+                  ).map(([value, label, hintText]) => (
+                    <label key={value} className={`radio${delayMode === value ? " on" : ""}`}>
+                      <input type="radio" name="delay" checked={delayMode === value} onChange={() => setDelayMode(value)} disabled={recorder.recording} />
+                      <span>
+                        {label}
+                        <small>{hintText}</small>
+                      </span>
+                    </label>
+                  ))}
+                  {delayMode === "fixed" && (
+                    <label className="fixed-ms">
+                      <input type="number" min={1} max={5000} value={fixedMs} onChange={(e) => setFixedMs(Math.max(1, Math.min(5000, Number(e.target.value) || 1)))} /> ms
+                    </label>
+                  )}
+                </div>
+              </aside>
 
-      <EditorFooter
-        code={macroKey(index)}
-        bytes={encodeMacroSteps(steps).length}
-        selectedKey={selectedKey}
-        extra={
-          <>
-            {thisDirty && (
-              <Button kind="ghost" onClick={onRevert}>
-                Revert
-              </Button>
-            )}
-            <Button kind="primary" disabled={!dirty} onClick={onSave}>
-              Save to keyboard
-            </Button>
-          </>
-        }
-      />
-    </div>
+              <div className="steps-col">
+                <div className="steps-head">
+                  <label className="check">
+                    <input type="checkbox" checked={allChecked} disabled={!steps.length} onChange={() => setChecked(allChecked ? new Set() : new Set(steps.map((_, i) => i)))} />
+                    Select all
+                  </label>
+                  <span className="muted small">
+                    {steps.length} step{steps.length === 1 ? "" : "s"}
+                  </span>
+                  <span className="spacer" />
+                  <Button small kind="ghost" disabled={!checked.size} onClick={() => remove(checked)}>
+                    <Icon name="trash" size={13} /> Delete{checked.size ? ` ${checked.size}` : ""}
+                  </Button>
+                </div>
+                <div className="steps-scroll">
+                  <ol className="steps">
+                    {steps.map((step, i) => (
+                      <li key={i} className={`step${active === i ? " active" : ""}${checked.has(i) ? " checked" : ""}`} onClick={() => setActive(active === i ? null : i)}>
+                        <input type="checkbox" className="step-check" checked={checked.has(i)} onClick={(e) => e.stopPropagation()} onChange={() => toggleCheck(i)} />
+                        <span className="step-index">{i + 1}</span>
+                        <span className={`step-icon step-${step.type}`} title={STEP_KIND[step.type]}>
+                          <Icon name={STEP_ICON[step.type]} size={16} />
+                        </span>
+                        <div className="step-body" onClick={(e) => e.target !== e.currentTarget && e.stopPropagation()}>
+                          <StepEditor mode={mode} step={step} onChange={(s) => update(i, s)} />
+                        </div>
+                        <span className="step-actions" onClick={(e) => e.stopPropagation()}>
+                          <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
+                            <Icon name="up" size={14} />
+                          </button>
+                          <button className="icon-btn" disabled={i === steps.length - 1} onClick={() => move(i, 1)} title="Move down">
+                            <Icon name="down" size={14} />
+                          </button>
+                          <button className="icon-btn danger" onClick={() => remove(new Set([i]))} title="Delete step">
+                            <Icon name="trash" size={14} />
+                          </button>
+                        </span>
+                      </li>
+                    ))}
+                    {!steps.length && !recorder.recording && <li className="steps-empty">No steps yet. Record one, add a step below, or click keys on the right.</li>}
+                    {recorder.recording && (
+                      <li className="recording-row">
+                        <span className="rec-dot" /> Recording. Press keys on your keyboard, then Stop. {recorder.count} events
+                      </li>
+                    )}
+                  </ol>
+                  <div className={`add-steps add-${mode}`}>
+                    {ADD_STEPS.filter((a) => a.modes.includes(mode)).map((a) => (
+                      <button
+                        key={a.label}
+                        className="add-step"
+                        title={a.title}
+                        onClick={() => {
+                          onChange([...steps, a.make()]);
+                          setActive(steps.length);
+                        }}
+                      >
+                        <Icon name={a.icon} size={15} />
+                        {a.label}
+                      </button>
+                    ))}
+                  </div>
+                  {note && <p className="steps-note muted small">{note}</p>}
+                </div>
+              </div>
+            </div>
+          ) : codeBlocked ? (
+            <div className="code-blocked">
+              <Empty title="This macro can't be shown as code" icon="code">
+                Open and Command steps have no code form. Edit this macro under Steps, or remove those steps to use code.
+              </Empty>
+            </div>
+          ) : (
+            <CodeEditor
+              steps={steps as MacroStep[]}
+              onApply={(next) => {
+                if (!isApp) return onChange(next);
+                const { steps: usable, dropped } = forApp(next);
+                if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can only tap keys and shortcuts, not hold them.`);
+                onChange(usable);
+              }}
+              insertRef={codeInsert}
+            />
+          )}
+
+          <EditorFooter code={code} bytes={isApp ? undefined : encodeMacroSteps(steps as MacroStep[]).length} selectedKey={selectedKey} extra={footer} />
+        </div>
+      </section>
+      <KeyPalette onPick={pickKey} addKind={addKind} setAddKind={setAddKind} hint={hint} showKind={!isApp && !editsKey} />
+    </>
   );
 }
 
@@ -806,14 +1108,28 @@ function EditorFooter({ code, bytes, selectedKey, extra }: { code: number; bytes
 
 const MODIFIERS = [kc("LCTL"), kc("LALT"), kc("LSFT"), kc("LGUI")];
 
-function StepEditor({ step, onChange }: { step: MacroStep; onChange: (s: MacroStep) => void }) {
+function AppKeySelect({ value, onChange }: { value: number; onChange: (code: number) => void }) {
   const platform = useStudio((s) => labelContext(s).platform);
+  return (
+    <select value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {APP_KEY_CODES.map((c) => (
+        <option key={c} value={c}>
+          {describe(c, { platform }).title}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+function StepEditor({ mode, step, onChange }: { mode: Mode; step: EStep; onChange: (s: EStep) => void }) {
+  const platform = useStudio((s) => labelContext(s).platform);
+  const KeySelect = mode === "app" ? AppKeySelect : BasicKeySelect;
   switch (step.type) {
     case "text": {
-      const bad = untypeableCharacters(step.text);
+      const bad = mode === "onboard" ? untypeableCharacters(step.text) : [];
       return (
         <>
-          <input className="grow" value={step.text} placeholder="Text to type" onChange={(e) => onChange({ type: "text", text: e.target.value })} />
+          <input className="grow" value={step.text} placeholder={mode === "app" ? "Any text, emoji or accents" : "Text to type"} onChange={(e) => onChange({ type: "text", text: e.target.value })} />
           {bad.length > 0 && (
             <span className="warn" title="The keyboard can only type plain US-layout characters. Use an app macro for anything else.">
               Can't type {bad.join(" ")}
@@ -826,21 +1142,24 @@ function StepEditor({ step, onChange }: { step: MacroStep; onChange: (s: MacroSt
       return (
         <>
           <div className="mod-row compact">
-            {MODIFIERS.map((m) => (
-              <button
-                key={m}
-                className={`mod${step.mods.includes(m) ? " on" : ""}`}
-                onClick={() => {
-                  const mods = step.mods.includes(m) ? step.mods.filter((x) => x !== m) : [...step.mods, m];
-                  onChange(mods.length ? { ...step, mods } : { type: "tap", key: step.key });
-                }}
-              >
-                {describe(m, { platform }).label}
-              </button>
-            ))}
+            {MODIFIERS.map((m) => {
+              const on = step.mods.includes(m) || step.mods.includes(m + 4);
+              return (
+                <button
+                  key={m}
+                  className={`mod${on ? " on" : ""}`}
+                  onClick={() => {
+                    const mods = on ? step.mods.filter((x) => x !== m && x !== m + 4) : [...step.mods, m];
+                    onChange(mods.length ? { ...step, mods } : { type: "tap", key: step.key });
+                  }}
+                >
+                  {describe(m, { platform }).label}
+                </button>
+              );
+            })}
           </div>
           <span className="plus">+</span>
-          <BasicKeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
+          <KeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
         </>
       );
     case "tap":
@@ -848,12 +1167,16 @@ function StepEditor({ step, onChange }: { step: MacroStep; onChange: (s: MacroSt
     case "up":
       return (
         <>
-          <select className="step-kind-select" value={step.type} onChange={(e) => onChange({ ...step, type: e.target.value as "tap" })}>
-            <option value="tap">Tap</option>
-            <option value="down">Hold</option>
-            <option value="up">Release</option>
-          </select>
-          <BasicKeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
+          {mode === "onboard" ? (
+            <select className="step-kind-select" value={step.type} onChange={(e) => onChange({ ...step, type: e.target.value as "tap" })}>
+              <option value="tap">Tap</option>
+              <option value="down">Hold</option>
+              <option value="up">Release</option>
+            </select>
+          ) : (
+            <span className="step-kind">Tap</span>
+          )}
+          <KeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
         </>
       );
     case "delay":
@@ -864,6 +1187,10 @@ function StepEditor({ step, onChange }: { step: MacroStep; onChange: (s: MacroSt
           <span className="muted">ms</span>
         </>
       );
+    case "open":
+      return <input className="grow" value={step.target} placeholder="https://…, a file, or an app name such as Safari" onChange={(e) => onChange({ type: "open", target: e.target.value })} />;
+    case "shell":
+      return <input className="grow mono" value={step.command} placeholder="Shell command" onChange={(e) => onChange({ type: "shell", command: e.target.value })} />;
     case "raw":
       return (
         <>
@@ -947,255 +1274,17 @@ function CodeEditor({ steps, onApply, insertRef }: { steps: MacroStep[]; onApply
   );
 }
 
-// --- app macro editor ---------------------------------------------------------------------------
-
-const APP_MODS: { mod: ShortcutMod; mac: string; win: string }[] = [
-  { mod: "ctrl", mac: "⌃", win: "Ctrl" },
-  { mod: "alt", mac: "⌥", win: "Alt" },
-  { mod: "shift", mac: "⇧", win: "Shift" },
-  { mod: "cmd", mac: "⌘", win: "Win" },
-];
-
-/** HID usage → the key names app macro shortcuts use. */
-const HID_TO_APP_KEY: Record<number, string> = (() => {
-  const map: Record<number, string> = {};
-  for (let i = 0; i < 26; i++) map[0x04 + i] = LETTERS[i];
-  for (let i = 0; i < 10; i++) map[0x1e + i] = DIGITS[i];
-  for (let i = 0; i < 12; i++) map[0x3a + i] = `f${i + 1}`;
-  for (let i = 0; i < 12; i++) map[0x68 + i] = `f${i + 13}`;
-  const named: [string, string][] = [
-    ["ENT", "return"],
-    ["ESC", "escape"],
-    ["BSPC", "delete"],
-    ["TAB", "tab"],
-    ["SPC", "space"],
-    ["MINS", "-"],
-    ["EQL", "="],
-    ["LBRC", "["],
-    ["RBRC", "]"],
-    ["BSLS", "\\"],
-    ["SCLN", ";"],
-    ["QUOT", "'"],
-    ["GRV", "`"],
-    ["COMM", ","],
-    ["DOT", "."],
-    ["SLSH", "/"],
-    ["HOME", "home"],
-    ["PGUP", "pageup"],
-    ["DEL", "forwarddelete"],
-    ["END", "end"],
-    ["PGDN", "pagedown"],
-    ["RGHT", "right"],
-    ["LEFT", "left"],
-    ["DOWN", "down"],
-    ["UP", "up"],
-  ];
-  for (const [qmk, name] of named) map[kc(qmk)] = name;
-  for (const code of Object.keys(map)) if (!SHORTCUT_KEYS.includes(map[Number(code)])) delete map[Number(code)];
-  return map;
-})();
-
-const APP_MOD_FOR_HID: Record<number, ShortcutMod> = { 0xe0: "ctrl", 0xe4: "ctrl", 0xe1: "shift", 0xe5: "shift", 0xe2: "alt", 0xe6: "alt", 0xe3: "cmd", 0xe7: "cmd" };
-
-function pickAppKey(id: string, code: number, active: number | null, setActive: (i: number | null) => void) {
-  const s = getState();
-  const macro = s.settings.appMacros.find((m) => m.id === id);
-  if (!macro) return;
-  const mod = APP_MOD_FOR_HID[code];
-  const key = HID_TO_APP_KEY[code];
-  const current = active !== null ? macro.actions[active] : undefined;
-  let actions = macro.actions;
-  if (current?.type === "shortcut") {
-    if (mod) actions = actions.map((a, i) => (i === active && a.type === "shortcut" ? { ...a, mods: a.mods.includes(mod) ? a.mods.filter((m) => m !== mod) : [...a.mods, mod] } : a));
-    else if (key) actions = actions.map((a, i) => (i === active && a.type === "shortcut" ? { ...a, key } : a));
-    else return toast("App macros can't press that key");
-  } else {
-    if (!key) return toast(mod ? "Add a Shortcut step, then click modifiers to add them to it" : "App macros can't press that key");
-    actions = [...actions, { type: "shortcut", mods: [], key }];
-    setActive(actions.length - 1);
-  }
-  void updateSettings({ appMacros: s.settings.appMacros.map((m) => (m.id === id ? { ...m, actions } : m)) });
-}
-
-const APP_ICON: Record<AppMacroAction["type"], keyof typeof ICONS> = { text: "text", shortcut: "combo", delay: "clock", open: "open", shell: "terminal" };
-
-function AppMacroEditor({
-  macro,
-  onSelect,
-  active,
-  setActive,
-  selectedKey,
-}: {
-  macro: AppMacro;
-  onSelect: (s: Selected) => void;
-  active: number | null;
-  setActive: (i: number | null) => void;
-  selectedKey?: LayoutKey;
-}) {
-  const appMacros = useStudio((s) => s.settings.appMacros);
-  const status = useStudio((s) => s.appMacroStatus);
-  const platform = host.platform;
-  const [name, setName] = useState(macro.name);
-  const save = (patch: Partial<AppMacro>) => void updateSettings({ appMacros: appMacros.map((m) => (m.id === macro.id ? { ...m, ...patch } : m)) });
-  const setActions = (actions: AppMacroAction[]) => save({ actions });
-  const update = (i: number, a: AppMacroAction) => setActions(macro.actions.map((x, j) => (j === i ? a : x)));
-  const move = (i: number, d: number) => {
-    const next = macro.actions.slice();
-    const [a] = next.splice(i, 1);
-    next.splice(i + d, 0, a);
-    setActions(next);
-    if (active === i) setActive(i + d);
-  };
-  const add = (a: AppMacroAction) => {
-    setActions([...macro.actions, a]);
-    setActive(macro.actions.length);
-  };
-  const failed = status?.failed.find((f) => f.id === macro.id);
-
-  return (
-    <div className="editor">
-      <header className="editor-top">
-        <span className="slot-badge app big">
-          <Icon name="bolt" size={15} />
-        </span>
-        <input className="title-input" value={name} onChange={(e) => setName(e.target.value)} onBlur={() => name.trim() && name !== macro.name && save({ name: name.trim() })} />
-        <span className="spacer" />
-        <MacroSwitcher selected={{ kind: "app", id: macro.id }} onSelect={onSelect} />
-      </header>
-      {failed && <p className="banner warn">Another app already uses this macro's trigger ({failed.accelerator}). Delete and recreate the macro to get a free one.</p>}
-      {status?.accessibility === "denied" && (
-        <p className="banner warn">
-          macOS needs to allow Keychron Studio under Privacy & Security → Accessibility before it can type or press keys.{" "}
-          <Button small onClick={() => void host.requestAccessibility().then((st) => setState({ appMacroStatus: st }))}>
-            Allow access…
-          </Button>
-        </p>
-      )}
-      <div className="steps-col solo">
-        <ol className="steps">
-          {macro.actions.map((a, i) => (
-            <li key={i} className={`step${active === i ? " active" : ""}`} onClick={() => setActive(active === i ? null : i)}>
-              <span className="step-index">{i + 1}</span>
-              <span className={`step-icon step-${a.type}`}>
-                <Icon name={APP_ICON[a.type]} size={16} />
-              </span>
-              <div className="step-body" onClick={(e) => e.target !== e.currentTarget && e.stopPropagation()}>
-                {a.type === "text" && <DraftInput className="grow" multiline value={a.text} placeholder="Any text, emoji or accents" onCommit={(text) => update(i, { type: "text", text })} />}
-                {a.type === "shortcut" && (
-                  <>
-                    <div className="mod-row compact">
-                      {APP_MODS.map((m) => (
-                        <button key={m.mod} className={`mod${a.mods.includes(m.mod) ? " on" : ""}`} onClick={() => update(i, { ...a, mods: a.mods.includes(m.mod) ? a.mods.filter((x) => x !== m.mod) : [...a.mods, m.mod] })}>
-                          {platform === "win32" ? m.win : m.mac}
-                        </button>
-                      ))}
-                    </div>
-                    <span className="plus">+</span>
-                    <select value={a.key} onChange={(e) => update(i, { ...a, key: e.target.value })}>
-                      {SHORTCUT_KEYS.map((k) => (
-                        <option key={k} value={k}>
-                          {k.length === 1 ? k.toUpperCase() : k}
-                        </option>
-                      ))}
-                    </select>
-                  </>
-                )}
-                {a.type === "delay" && (
-                  <>
-                    <span className="step-kind">Wait</span>
-                    <input type="number" min={1} max={60000} value={a.ms} onChange={(e) => update(i, { type: "delay", ms: Math.max(1, Math.min(60000, Number(e.target.value) || 1)) })} />
-                    <span className="muted">ms</span>
-                  </>
-                )}
-                {a.type === "open" && <DraftInput className="grow" value={a.target} placeholder="https://…, a file, or an app name such as Safari" onCommit={(target) => update(i, { type: "open", target })} />}
-                {a.type === "shell" && <DraftInput className="grow mono" value={a.command} placeholder="Shell command" onCommit={(command) => update(i, { type: "shell", command })} />}
-              </div>
-              <span className="step-actions" onClick={(e) => e.stopPropagation()}>
-                <button className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} title="Move up">
-                  <Icon name="up" size={14} />
-                </button>
-                <button className="icon-btn" disabled={i === macro.actions.length - 1} onClick={() => move(i, 1)} title="Move down">
-                  <Icon name="down" size={14} />
-                </button>
-                <button
-                  className="icon-btn danger"
-                  onClick={() => {
-                    setActions(macro.actions.filter((_, j) => j !== i));
-                    setActive(null);
-                  }}
-                  title="Delete step"
-                >
-                  <Icon name="trash" size={14} />
-                </button>
-              </span>
-            </li>
-          ))}
-          {!macro.actions.length && <li className="steps-empty">Add what this macro should do, or click keys on the right to press them.</li>}
-        </ol>
-        <div className="add-steps">
-          <button className="add-step" title="Type any text, including emoji and accents" onClick={() => add({ type: "text", text: "" })}>
-            <Icon name="text" size={15} /> Text
-          </button>
-          <button className="add-step" title="Press a shortcut such as ⌘C" onClick={() => add({ type: "shortcut", mods: ["cmd"], key: "c" })}>
-            <Icon name="combo" size={15} /> Shortcut
-          </button>
-          <button className="add-step" title="Pause before the next step" onClick={() => add({ type: "delay", ms: 200 })}>
-            <Icon name="clock" size={15} /> Wait
-          </button>
-          <button className="add-step" title="Open a website, file or app" onClick={() => add({ type: "open", target: "" })}>
-            <Icon name="open" size={15} /> Open
-          </button>
-          <button className="add-step" title="Run a shell command" onClick={() => add({ type: "shell", command: "" })}>
-            <Icon name="terminal" size={15} /> Command
-          </button>
-        </div>
-        <p className="muted small">
-          The key sends {triggerAccelerator(macro.trigger).replace(/\+/g, " + ")}, which this app turns into the steps above. Works while Keychron Studio runs (it can stay in the menu bar).
-        </p>
-      </div>
-      <EditorFooter
-        code={macro.trigger}
-        selectedKey={selectedKey}
-        extra={
-          <>
-            <Button
-              kind="ghost"
-              onClick={() => {
-                if (!window.confirm(`Delete “${macro.name}”? Keys set to it will stop working.`)) return;
-                void updateSettings({ appMacros: appMacros.filter((m) => m.id !== macro.id) });
-                onSelect({ kind: "onboard", index: 0 });
-              }}
-            >
-              Delete
-            </Button>
-            <Button onClick={() => void host.runAppMacro(macro.id).catch((e) => toast(errorMessage(e), "error"))} disabled={!macro.actions.length}>
-              <Icon name="play" size={13} /> Test run
-            </Button>
-          </>
-        }
-      />
-    </div>
-  );
-}
-
-function DraftInput({ value, onCommit, className, placeholder, multiline }: { value: string; onCommit: (v: string) => void; className?: string; placeholder?: string; multiline?: boolean }) {
-  const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
-  const props = {
-    className,
-    placeholder,
-    value: draft,
-    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(e.target.value),
-    onBlur: () => draft !== value && onCommit(draft),
-  };
-  return multiline ? <textarea rows={Math.min(5, Math.max(1, draft.split("\n").length))} {...props} /> : <input {...props} />;
-}
-
 // --- key palette ---------------------------------------------------------------------------------
 
 const range = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+/** Left and right modifiers side by side: Control, Option/Alt, Shift, Command/Win. */
+const MODIFIER_ROWS: [number, number][] = [
+  [kc("LCTL"), kc("RCTL")],
+  [kc("LALT"), kc("RALT")],
+  [kc("LSFT"), kc("RSFT")],
+  [kc("LGUI"), kc("RGUI")],
+];
 const PALETTE: { title: string; codes: number[] }[] = [
-  { title: "Modifiers", codes: ["LCTL", "LALT", "LSFT", "LGUI", "RCTL", "RALT", "RSFT", "RGUI"].map(kc) },
   { title: "Editing", codes: ["ESC", "TAB", "ENT", "BSPC", "DEL", "SPC", "CAPS", "INS"].map(kc) },
   { title: "Navigation", codes: ["LEFT", "DOWN", "UP", "RGHT", "HOME", "END", "PGUP", "PGDN"].map(kc) },
   { title: "Letters", codes: range(0x04, 0x1d) },
@@ -1211,15 +1300,22 @@ function KeyPalette({ onPick, addKind, setAddKind, hint, showKind }: { onPick: (
   const platform = useStudio((s) => labelContext(s).platform);
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const groups = PALETTE.map((g) => ({
-    ...g,
-    codes: q
-      ? g.codes.filter((c) => {
-          const d = describe(c, { platform });
-          return `${d.title} ${d.label} ${keycodeName(c)}`.toLowerCase().includes(q);
-        })
-      : g.codes,
-  })).filter((g) => g.codes.length);
+  const matches = (c: number) => {
+    if (!q) return true;
+    const d = describe(c, { platform });
+    return `${d.title} ${d.label} ${keycodeName(c)}`.toLowerCase().includes(q);
+  };
+  const groups = PALETTE.map((g) => ({ ...g, codes: g.codes.filter(matches) })).filter((g) => g.codes.length);
+  const modRows = MODIFIER_ROWS.map((row) => row.filter(matches)).filter((row) => row.length);
+  const key = (c: number, label?: string) => {
+    const d = describe(c, { platform });
+    const text = label ?? d.label;
+    return (
+      <button key={c} className={`pkey${text.length > 3 ? " wide" : ""}`} title={`${d.title} · ${keycodeName(c)}`} onClick={() => onPick(c)}>
+        {text}
+      </button>
+    );
+  };
   return (
     <section className="key-palette">
       <header className="column-head">
@@ -1247,22 +1343,23 @@ function KeyPalette({ onPick, addKind, setAddKind, hint, showKind }: { onPick: (
         )}
       </div>
       <div className="palette-body">
+        {modRows.length > 0 && (
+          <div className="palette-group">
+            <h4>Modifiers</h4>
+            <div className="mod-table">
+              <span className="mod-side">Left</span>
+              <span className="mod-side">Right</span>
+              {modRows.flatMap((row) => row.map((c) => key(c, describe(c, { platform }).label)))}
+            </div>
+          </div>
+        )}
         {groups.map((g) => (
           <div key={g.title} className="palette-group">
             <h4>{g.title}</h4>
-            <div className="palette-grid">
-              {g.codes.map((c) => {
-                const d = describe(c, { platform });
-                return (
-                  <button key={c} className={`pkey${d.label.length > 3 ? " wide" : ""}`} title={`${d.title} · ${keycodeName(c)}`} onClick={() => onPick(c)}>
-                    {d.label}
-                  </button>
-                );
-              })}
-            </div>
+            <div className="palette-grid">{g.codes.map((c) => key(c))}</div>
           </div>
         ))}
-        {!groups.length && <p className="muted small">No keys match “{query}”.</p>}
+        {!groups.length && !modRows.length && <p className="muted small">No keys match “{query}”.</p>}
       </div>
     </section>
   );
