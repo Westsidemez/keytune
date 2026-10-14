@@ -194,8 +194,9 @@ export class Keyboard {
 
   // --- lighting ------------------------------------------------------------------
 
-  async setBrightness(value: number): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.BRIGHTNESS, [clamp8(value)]);
+  /** Pass persist=false while a slider is moving; the final value must be persisted. */
+  async setBrightness(value: number, persist = true): Promise<void> {
+    await this.protocol.setRgbValue(RGB_VALUE.BRIGHTNESS, [clamp8(value)], persist);
     this.updateLighting({ brightness: clamp8(value) });
   }
 
@@ -204,13 +205,14 @@ export class Keyboard {
     this.updateLighting({ effect: clamp8(effect) });
   }
 
-  async setSpeed(value: number): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.SPEED, [clamp8(value)]);
+  /** Pass persist=false while a slider is moving; the final value must be persisted. */
+  async setSpeed(value: number, persist = true): Promise<void> {
+    await this.protocol.setRgbValue(RGB_VALUE.SPEED, [clamp8(value)], persist);
     this.updateLighting({ speed: clamp8(value) });
   }
 
-  async setColor(hue: number, sat: number): Promise<void> {
-    await this.protocol.setRgbValue(RGB_VALUE.COLOR, [clamp8(hue), clamp8(sat)]);
+  async setColor(hue: number, sat: number, persist = true): Promise<void> {
+    await this.protocol.setRgbValue(RGB_VALUE.COLOR, [clamp8(hue), clamp8(sat)], persist);
     this.updateLighting({ hue: clamp8(hue), sat: clamp8(sat) });
   }
 

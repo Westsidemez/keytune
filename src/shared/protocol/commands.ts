@@ -275,9 +275,9 @@ export class KeyboardProtocol {
    * value to flash when the save follows a single set, so each value is saved
    * on its own.
    */
-  async setRgbValue(valueId: number, data: number[]): Promise<void> {
+  async setRgbValue(valueId: number, data: number[], persist = true): Promise<void> {
     await this.transport.request([VIA.CUSTOM_SET_VALUE, RGB_MATRIX_CHANNEL, valueId, ...data], { echo: 2 });
-    await this.transport.request([VIA.CUSTOM_SAVE, RGB_MATRIX_CHANNEL, valueId], { echo: 2 });
+    if (persist) await this.transport.request([VIA.CUSTOM_SAVE, RGB_MATRIX_CHANNEL, valueId], { echo: 2 });
   }
 
   // --- Keychron extensions ---------------------------------------------------
