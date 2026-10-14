@@ -205,6 +205,10 @@ function setupIpc(): void {
     if (text.length > 5_000_000) throw new Error("That file is too large to be a keyboard file");
     return JSON.parse(text);
   });
+  ipcMain.handle("file:choose", async () => {
+    const result = await dialog.showOpenDialog(window!, { title: "Choose what to open", buttonLabel: "Choose", properties: ["openFile", "openDirectory"] });
+    return result.canceled ? null : (result.filePaths[0] ?? null);
+  });
   ipcMain.handle("appMacros:status", () => runner.status());
   ipcMain.handle("appMacros:requestAccess", () => runner.requestAccessibility());
   ipcMain.handle("appMacros:run", (_e, id: string) => runner.run(id, 0));

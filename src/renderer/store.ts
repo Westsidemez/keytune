@@ -468,6 +468,7 @@ function browserHost(): StudioHost {
     deleteProfile: async () => undefined,
     exportJson: async () => false,
     importJson: async () => null,
+    chooseFile: async () => null,
     appMacroStatus: async () => ({ accessibility: "not-needed", registered: 0, failed: [] }),
     requestAccessibility: async () => ({ accessibility: "not-needed", registered: 0, failed: [] }),
     runAppMacro: async () => undefined,

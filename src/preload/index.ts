@@ -11,6 +11,7 @@ const host: StudioHost = {
   deleteProfile: (id) => ipcRenderer.invoke("profiles:delete", id),
   exportJson: (name, data) => ipcRenderer.invoke("file:export", name, data),
   importJson: () => ipcRenderer.invoke("file:import"),
+  chooseFile: () => ipcRenderer.invoke("file:choose"),
   appMacroStatus: () => ipcRenderer.invoke("appMacros:status"),
   requestAccessibility: () => ipcRenderer.invoke("appMacros:requestAccess"),
   runAppMacro: (id) => ipcRenderer.invoke("appMacros:run", id),

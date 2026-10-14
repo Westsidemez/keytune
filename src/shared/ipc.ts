@@ -58,6 +58,8 @@ export interface StudioHost {
   deleteProfile(id: string): Promise<void>;
   exportJson(defaultName: string, data: unknown): Promise<boolean>;
   importJson(): Promise<unknown | null>;
+  /** Pick a file, folder or app in Finder; returns its path. */
+  chooseFile(): Promise<string | null>;
   appMacroStatus(): Promise<AppMacroStatus>;
   requestAccessibility(): Promise<AppMacroStatus>;
   runAppMacro(id: string): Promise<void>;

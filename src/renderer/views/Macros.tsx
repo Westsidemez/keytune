@@ -1173,6 +1173,56 @@ function AssignPanel({ code, badge, name, steps, isApp, selectedKey }: { code: n
 
 const MODIFIERS = [kc("LCTL"), kc("LALT"), kc("LSFT"), kc("LGUI")];
 
+/** Pencil button: click it, then press a key (with modifiers, e.g. ⌘C) to set the step's key. */
+function KeyCapture({ onKey }: { onKey: (key: number, mods: number[]) => void }) {
+  const [on, setOn] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const report = useRef(onKey);
+  report.current = onKey;
+  useEffect(() => {
+    if (!on) return;
+    void host.setRecording(true);
+    let soloModifier: number | null = null;
+    const finish = (key: number, mods: number[]) => {
+      setOn(false);
+      button.current?.blur();
+      report.current(key, mods);
+    };
+    const down = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.repeat) return;
+      const code = hidCodeFor(e.code);
+      if (code === undefined) return;
+      if (isModifierKey(code)) {
+        soloModifier = code;
+        return;
+      }
+      const mods = [e.ctrlKey && kc("LCTL"), e.altKey && kc("LALT"), e.shiftKey && kc("LSFT"), e.metaKey && kc("LGUI")].filter((m): m is number => typeof m === "number");
+      finish(code, mods);
+    };
+    const up = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // A modifier pressed and released on its own sets that modifier as the key.
+      const code = hidCodeFor(e.code);
+      if (code !== undefined && code === soloModifier) finish(code, []);
+    };
+    window.addEventListener("keydown", down, true);
+    window.addEventListener("keyup", up, true);
+    return () => {
+      void host.setRecording(false);
+      window.removeEventListener("keydown", down, true);
+      window.removeEventListener("keyup", up, true);
+    };
+  }, [on]);
+  return (
+    <button ref={button} className={`icon-btn key-capture${on ? " on" : ""}`} title="Type the key instead of picking it" onClick={() => setOn(!on)} onBlur={() => setOn(false)}>
+      {on ? <span>Press a key…</span> : <Icon name="pencil" size={14} />}
+    </button>
+  );
+}
+
 const APP_MOD_CODES = Object.keys(HID_TO_APP_MOD).map(Number);
 
 function AppKeySelect({ value, onChange, modifiers }: { value: number; onChange: (code: number) => void; modifiers?: boolean }) {
@@ -1227,6 +1277,12 @@ function StepEditor({ mode, step, onChange }: { mode: Mode; step: EStep; onChang
           </div>
           <span className="plus">+</span>
           <KeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
+          <KeyCapture
+            onKey={(key, mods) => {
+              if (isModifierKey(key) || (mode === "app" && !HID_TO_APP_KEY[key])) return void toast(isModifierKey(key) ? "Press a key together with the modifiers, e.g. ⌘C" : "App macros can't press that key");
+              onChange(mods.length ? { type: "shortcut", mods, key } : { ...step, key });
+            }}
+          />
         </>
       );
     case "tap":
@@ -1240,6 +1296,13 @@ function StepEditor({ mode, step, onChange }: { mode: Mode; step: EStep; onChang
             <option value="up">Release</option>
           </select>
           {mode === "app" ? <AppKeySelect modifiers value={step.key} onChange={(key) => onChange({ ...step, key })} /> : <BasicKeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />}
+          <KeyCapture
+            onKey={(key, mods) => {
+              if (mode === "app" && !(mods.length ? HID_TO_APP_KEY[key] : appKeyFor(key))) return void toast("App macros can't press that key");
+              // Typing a key with modifiers on a Tap step turns it into a shortcut.
+              onChange(mods.length && step.type === "tap" ? { type: "shortcut", mods, key } : { ...step, key });
+            }}
+          />
         </>
       );
     case "delay":
@@ -1251,7 +1314,14 @@ function StepEditor({ mode, step, onChange }: { mode: Mode; step: EStep; onChang
         </>
       );
     case "open":
-      return <input className="grow" value={step.target} placeholder="https://…, a file, or an app name such as Safari" onChange={(e) => onChange({ type: "open", target: e.target.value })} />;
+      return (
+        <>
+          <input className="grow" value={step.target} placeholder="https://…, a file, or an app name such as Safari" onChange={(e) => onChange({ type: "open", target: e.target.value })} />
+          <Button small onClick={() => void host.chooseFile().then((path) => path && onChange({ type: "open", target: path }))} title="Pick a file, folder or app in Finder">
+            <Icon name="folder" size={13} /> Choose…
+          </Button>
+        </>
+      );
     case "shell":
       return <input className="grow mono" value={step.command} placeholder="Shell command" onChange={(e) => onChange({ type: "shell", command: e.target.value })} />;
     case "raw":
