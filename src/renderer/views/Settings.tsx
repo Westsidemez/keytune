@@ -11,7 +11,7 @@ export function SettingsView() {
   const status = useStudio((s) => s.appMacroStatus);
   const isMac = host.platform === "darwin";
   return (
-    <Page title="Settings" subtitle={`Keychron Studio ${host.version}`}>
+    <Page title="Settings" subtitle={`Keytune ${host.version}`}>
       <div className="settings-grid">
         <Card title="Appearance">
           <label className="field">
@@ -98,8 +98,8 @@ export function SettingsView() {
         </Card>
 
         <Card title="About">
-          <p className="muted">Keychron Studio talks to the keyboard over USB with the same protocol as Keychron Launcher and VIA. Close those apps (and browser tabs using them) while this one is open.</p>
-          <p className="muted small">Not affiliated with Keychron. Firmware is never modified.</p>
+          <p className="muted">Keytune talks to the keyboard over USB with the same protocol as Keychron Launcher and VIA. Close those apps (and browser tabs using them) while this one is open.</p>
+          <p className="muted small">Not affiliated with Keychron or VIA. Firmware is never modified.</p>
         </Card>
       </div>
     </Page>

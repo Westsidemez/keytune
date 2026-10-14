@@ -1,9 +1,10 @@
 {
-  "name": "keychron-studio",
-  "productName": "Keychron Studio",
+  "name": "keytune",
+  "productName": "Keytune",
   "version": "0.1.0",
   "private": true,
-  "description": "Configure Keychron keyboards over USB-C: keymap, knob, lighting, macros and more.",
+  "description": "Tune every key, light and macro on Keychron and VIA keyboards.",
+  "license": "GPL-3.0-or-later",
   "main": "out/main/index.js",
   "scripts": {
     "build": "node scripts/build.mjs",

@@ -19,8 +19,23 @@ const runner = new AppMacroRunner((message) => console.error(message));
 
 if (smoke) {
   // Smoke tests never touch the user's settings or profiles.
-  app.setPath("userData", fs.mkdtempSync(path.join(app.getPath("temp"), "keychron-studio-smoke-")));
-} else if (!app.requestSingleInstanceLock()) app.quit();
+  app.setPath("userData", fs.mkdtempSync(path.join(app.getPath("temp"), "keytune-smoke-")));
+} else {
+  moveOldUserData();
+  if (!app.requestSingleInstanceLock()) app.quit();
+}
+
+/** The app used to be called "Keychron Studio"; bring its settings, profiles and window state across once. */
+function moveOldUserData(): void {
+  const from = path.join(app.getPath("appData"), "Keychron Studio");
+  const to = app.getPath("userData");
+  if (!fs.existsSync(from) || fs.existsSync(path.join(to, "settings.json"))) return;
+  try {
+    fs.cpSync(from, to, { recursive: true, force: false, filter: (source) => !/Singleton/.test(path.basename(source)) });
+  } catch (error) {
+    console.error(`Could not copy settings from ${from}: ${error}`);
+  }
+}
 
 app.on("second-instance", () => showWindow());
 
@@ -31,7 +46,7 @@ function createWindow(): BrowserWindow {
     minWidth: 1120,
     minHeight: 740,
     show: false,
-    title: "Keychron Studio",
+    title: "Keytune",
     backgroundColor: "#0c0d10",
     titleBarStyle: isMac ? "hiddenInset" : "default",
     trafficLightPosition: { x: 18, y: 18 },
@@ -146,12 +161,12 @@ function setupTray(): void {
   const icon = nativeImage.createFromPath(path.join(__dirname, "../renderer/trayTemplate.png"));
   icon.setTemplateImage(true);
   tray = new Tray(icon);
-  tray.setToolTip("Keychron Studio");
+  tray.setToolTip("Keytune");
   const rebuild = () => {
     const macros = storage.settings().appMacros;
     tray?.setContextMenu(
       Menu.buildFromTemplate([
-        { label: "Open Keychron Studio", click: () => showWindow() },
+        { label: "Open Keytune", click: () => showWindow() },
         { type: "separator" },
         { label: macros.length ? `${macros.length} app macro${macros.length === 1 ? "" : "s"} active` : "No app macros", enabled: false },
         ...macros.slice(0, 12).map((m) => ({ label: `Run “${m.name}”`, click: () => void runner.run(m.id, false).catch(() => undefined) })),

@@ -54,7 +54,7 @@ export function App() {
   return (
     <div className="app">
       <nav className="rail">
-        <div className="rail-brand" title="Keychron Studio">
+        <div className="rail-brand" title="Keytune">
           <span className="brand-mark" />
         </div>
         {NAV.map((n) => (
@@ -223,7 +223,7 @@ function ConnectScreen() {
       ) : c.status === "unavailable" ? (
         <>
           <h1>USB access isn't available here</h1>
-          <p>Open Keychron Studio as the desktop app to connect a keyboard. You can still explore with the demo keyboard.</p>
+          <p>Open Keytune as the desktop app to connect a keyboard. You can still explore with the demo keyboard.</p>
           <div className="connect-actions">
             <Button kind="primary" onClick={() => void connectDemo()}>
               Use demo keyboard

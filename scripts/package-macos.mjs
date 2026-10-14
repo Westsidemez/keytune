@@ -1,4 +1,4 @@
-// Packages out/ into release/Keychron Studio-darwin-arm64/Keychron Studio.app,
+// Packages out/ into release/Keytune-darwin-arm64/Keytune.app,
 // then launches the packaged app once in smoke-test mode to prove it starts and renders.
 
 import fs from "node:fs";
@@ -11,7 +11,7 @@ import { packager } from "@electron/packager";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
 const releaseRoot = path.join(root, "release");
-const productName = "Keychron Studio";
+const productName = "Keytune";
 const appPath = path.join(releaseRoot, `${productName}-darwin-arm64`, `${productName}.app`);
 
 for (const relative of ["out/main/index.js", "out/preload/index.js", "out/renderer/index.html", "out/renderer/trayTemplate.png", "build/icon.icns"]) {
@@ -29,15 +29,15 @@ await packager({
   overwrite: true,
   prune: true,
   icon: path.join(root, "build/icon.icns"),
-  appBundleId: "com.local.keychron-studio",
+  appBundleId: "io.keytune.app",
   appVersion: pkg.version,
   buildVersion: pkg.version,
   appCategoryType: "public.app-category.utilities",
   extendInfo: {
-    NSAppleEventsUsageDescription: "Keychron Studio presses keys and types text for your app macros.",
+    NSAppleEventsUsageDescription: "Keytune presses keys and types text for your app macros.",
     LSMultipleInstancesProhibited: true,
   },
-  ignore: /^\/(?:\.git|src|scripts|test|build|release|vite\.config\.ts|vitest\.config\.ts|tsconfig\.json)(?:\/|$)/,
+  ignore: /^\/(?:\.[^/]+|src|docs|scripts|test|build|release|vite\.config\.ts|vitest\.config\.ts|tsconfig\.json)(?:\/|$)/,
 });
 
 for (const relative of ["Contents/Info.plist", `Contents/MacOS/${productName}`, "Contents/Resources/app/out/main/index.js", "Contents/Resources/app/out/renderer/index.html", "Contents/Resources/electron.icns"]) {
@@ -45,7 +45,7 @@ for (const relative of ["Contents/Info.plist", `Contents/MacOS/${productName}`, 
 }
 
 // Smoke test: the packaged app opens the demo keyboard offscreen and saves a screenshot.
-const shot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "keychron-studio-smoke-")), "keymap.png");
+const shot = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "keytune-smoke-")), "keymap.png");
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 const run = spawnSync(path.join(appPath, "Contents/MacOS", productName), [`--smoke-screenshot=${shot}`, "--smoke-view=keymap", "--smoke-self-test"], { stdio: "inherit", timeout: 90_000, env });

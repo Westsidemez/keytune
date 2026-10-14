@@ -81,7 +81,7 @@ describe("profiles", () => {
   });
 
   it("rejects files that aren't profiles", () => {
-    expect(() => parseProfile({ hello: 1 })).toThrow(/not a Keychron Studio profile/);
+    expect(() => parseProfile({ hello: 1 })).toThrow(/not a Keytune profile/);
   });
 });
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import type { StoredProfile } from "../../shared/ipc";
-import { ALL_SECTIONS, applyProfile, exportViaLayout, importViaLayout, parseProfile, PROFILE_FORMAT, snapshot, type Profile, type ProfileSection, type ViaLayoutFile } from "../../shared/profile";
+import { ALL_SECTIONS, applyProfile, exportViaLayout, importViaLayout, isProfileFormat, parseProfile, snapshot, type Profile, type ProfileSection, type ViaLayoutFile } from "../../shared/profile";
 import { Page } from "../components/Workspace";
 import { Button, Card, Empty, Icon, Modal } from "../components/ui";
 import { addDefinition, errorMessage, getState, host, keyboardId, macroNames, perform, setState, toast, updateSettings, useStudio } from "../store";
@@ -254,13 +254,13 @@ async function restoreMacroNames(profile: Profile, sections: ProfileSection[]): 
   await updateSettings({ macroNames: { ...s.settings.macroNames, [keyboardId()]: names } });
 }
 
-/** Import a Keychron Studio profile, a VIA saved layout, or a VIA keyboard definition. */
+/** Import a Keytune profile, a VIA saved layout, or a VIA keyboard definition. */
 export async function importFile(): Promise<void> {
   try {
     const data = (await host.importJson()) as Record<string, unknown> | null;
     if (!data) return;
     const s = getState();
-    if (data.format === PROFILE_FORMAT) {
+    if (isProfileFormat(data.format)) {
       const profile = parseProfile(data);
       await host.saveProfile({ id: `profile-${Date.now()}`, kind: "profile", profile });
       toast(`Imported “${profile.name}”. Apply it from Profiles.`, "success");

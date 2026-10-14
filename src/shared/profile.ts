@@ -6,7 +6,9 @@ import { describe as describeKey, keycodeName, parseKeycode, type CustomKeycode 
 import { decodeMacro, encodeActions, type MacroAction } from "./macros";
 import type { HSV, MixedEffect, IndicatorConfig } from "./protocol/commands";
 
-export const PROFILE_FORMAT = "keychron-studio-profile";
+export const PROFILE_FORMAT = "keytune-profile";
+/** Profiles saved before the app was renamed. */
+const LEGACY_PROFILE_FORMAT = "keychron-studio-profile";
 
 export interface ProfileLighting {
   brightness: number;
@@ -67,11 +69,15 @@ export function snapshot(state: KeyboardState, name: string, macroNames: (string
   };
 }
 
+export function isProfileFormat(format: unknown): boolean {
+  return format === PROFILE_FORMAT || format === LEGACY_PROFILE_FORMAT;
+}
+
 export function parseProfile(value: unknown): Profile {
   const p = value as Profile;
-  if (!p || p.format !== PROFILE_FORMAT || p.version !== 1) throw new Error("This is not a Keychron Studio profile");
+  if (!p || !isProfileFormat(p.format) || p.version !== 1) throw new Error("This is not a Keytune profile");
   if (!p.keyboard || typeof p.keyboard.vendorId !== "number") throw new Error("Profile has no keyboard information");
-  return p;
+  return { ...p, format: PROFILE_FORMAT };
 }
 
 export function profileMacroData(profile: Profile): Uint8Array[] | undefined {
