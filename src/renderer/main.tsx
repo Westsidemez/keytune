@@ -32,7 +32,7 @@ window.__smokeReady = async (view: string) => {
     const items = document.querySelectorAll<HTMLElement>(".macro-library .slots")[1]?.querySelectorAll<HTMLElement>(".slot-item");
     (items && items.length > 1 ? items[0] : items?.[0])?.click();
   }
-  if (name === "keymap" && s.model) {
+  if ((name === "keymap" || name === "macros") && s.model) {
     const key = s.model.layout.keys.find((k) => k.row === 3 && k.col === 0);
     if (key) setState({ selection: { kind: "key", id: key.id } });
   }

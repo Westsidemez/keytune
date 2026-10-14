@@ -107,14 +107,28 @@ export function MacrosView() {
     <Workspace
       compact
       keyboard={
-        <KeyboardView
-          selected={selectedKey ? new Set([selectedKey.id]) : undefined}
-          onKeyPress={(key: LayoutKey) => key.row >= 0 && setState({ selection: { kind: "key", id: key.id } })}
-          decorate={(key) => {
-            if (key.row < 0 || currentCode === undefined) return undefined;
-            return kb.keymap[getState().layer][key.row * kb.cols + key.col] === currentCode ? { className: "macro-home" } : undefined;
-          }}
-        />
+        <div className="macro-stage">
+          <div className="macro-stage-board">
+            <KeyboardView
+              selected={selectedKey ? new Set([selectedKey.id]) : undefined}
+              onKeyPress={(key: LayoutKey) => key.row >= 0 && setState({ selection: { kind: "key", id: key.id } })}
+              decorate={(key) => {
+                if (key.row < 0 || currentCode === undefined) return undefined;
+                return kb.keymap[getState().layer][key.row * kb.cols + key.col] === currentCode ? { className: "macro-home" } : undefined;
+              }}
+            />
+          </div>
+          {currentCode !== undefined && (
+            <AssignPanel
+              code={currentCode}
+              badge={selected.kind === "onboard" ? `M${String(selected.index).padStart(2, "0")}` : null}
+              name={selected.kind === "onboard" ? (macroNames()[selected.index] ?? `Macro ${selected.index}`) : (appMacro?.name ?? "")}
+              steps={selected.kind === "onboard" ? stepsFor(selected.index) : appToSteps(appMacro?.actions ?? [])}
+              isApp={selected.kind === "app"}
+              selectedKey={selectedKey}
+            />
+          )}
+        </div>
       }
       panel={
         <div className="macro-studio">
@@ -136,7 +150,6 @@ export function MacrosView() {
               selected={selected}
               steps={stepsFor(selected.index)}
               onChange={(next) => setSteps(selected.index, next as MacroStep[])}
-              code={macroKey(selected.index)}
               title={macroNames()[selected.index] ?? ""}
               onRename={(name) => void setMacroName(selected.index, name)}
               footer={
@@ -156,7 +169,7 @@ export function MacrosView() {
                     </Button>
                   )}
                   <Button kind="primary" disabled={!drafts.size} onClick={save}>
-                    Save to keyboard
+                    Save steps to keyboard
                   </Button>
                 </>
               }
@@ -741,7 +754,6 @@ function AppWorkbench({ macro, ...shared }: { macro: AppMacro } & SharedProps) {
       selected={{ kind: "app", id: macro.id }}
       steps={steps}
       onChange={onChange}
-      code={macro.trigger}
       title={macro.name}
       onRename={(name) => name.trim() && void updateSettings({ appMacros: appMacros.map((m) => (m.id === macro.id ? { ...m, name: name.trim() } : m)) })}
       banners={
@@ -815,7 +827,6 @@ function Workbench({
   selected,
   steps,
   onChange,
-  code,
   title,
   onRename,
   footer,
@@ -824,13 +835,11 @@ function Workbench({
   tab,
   setTab,
   onSelect,
-  selectedKey,
 }: {
   mode: Mode;
   selected: Selected;
   steps: EStep[];
   onChange: (s: EStep[]) => void;
-  code: number;
   title: string;
   onRename: (name: string) => void;
   footer: React.ReactNode;
@@ -1051,7 +1060,7 @@ function Workbench({
             />
           )}
 
-          <EditorFooter code={code} bytes={isApp ? undefined : encodeMacroSteps(steps as MacroStep[]).length} selectedKey={selectedKey} extra={footer} />
+          <EditorFooter isApp={isApp} bytes={isApp ? undefined : encodeMacroSteps(steps as MacroStep[]).length} extra={footer} />
         </div>
       </section>
       <KeyPalette onPick={pickKey} addKind={addKind} setAddKind={setAddKind} hint={hint} showKind={!isApp && !editsKey} />
@@ -1059,12 +1068,26 @@ function Workbench({
   );
 }
 
-function EditorFooter({ code, bytes, selectedKey, extra }: { code: number; bytes?: number; selectedKey?: LayoutKey; extra?: React.ReactNode }) {
+function EditorFooter({ bytes, extra, isApp }: { bytes?: number; extra?: React.ReactNode; isApp: boolean }) {
+  return (
+    <footer className="editor-footer">
+      <span className="muted small">{isApp ? "Changes to app macros are saved as you make them." : "Step changes stay in this app until you save them to the keyboard."}</span>
+      <span className="spacer" />
+      {bytes !== undefined && <span className="muted small">{bytes} bytes</span>}
+      {extra}
+    </footer>
+  );
+}
+
+// --- assign panel (beside the keyboard) ------------------------------------------------------
+
+function AssignPanel({ code, badge, name, steps, isApp, selectedKey }: { code: number; badge: string | null; name: string; steps: EStep[]; isApp: boolean; selectedKey?: LayoutKey }) {
   const kb = useStudio((s) => s.kb)!;
   const model = useStudio((s) => s.model)!;
   const layer = useStudio((s) => s.layer);
   const ctx = useStudio((s) => labelContext(s));
   const appMacros = useStudio((s) => s.settings.appMacros);
+  const layerName = (l: number) => model.layerNames[l] ?? `Layer ${l}`;
   const usedOn = useMemo(() => {
     const found: { layer: number; key: LayoutKey }[] = [];
     kb.keymap.forEach((l, li) => {
@@ -1072,37 +1095,67 @@ function EditorFooter({ code, bytes, selectedKey, extra }: { code: number; bytes
     });
     return found;
   }, [code, kb, model]);
-  const keyCode = selectedKey ? kb.keymap[layer][selectedKey.row * kb.cols + selectedKey.col] : undefined;
-  const keyName = (key: LayoutKey) => (model.defaults ? keyLabel(model.defaults.layers[0]?.[key.row * kb.cols + key.col] ?? 0, ctx, appMacros).title : "") || `Key ${key.id}`;
-  const layerName = (l: number) => model.layerNames[l] ?? `Layer ${l}`;
+  const index = selectedKey ? selectedKey.row * kb.cols + selectedKey.col : -1;
+  const keyCode = selectedKey ? kb.keymap[layer][index] : undefined;
+  const current = keyCode !== undefined ? keyLabel(keyCode, ctx, appMacros) : undefined;
+  const factory = selectedKey ? model.defaults?.layers[layer]?.[index] : undefined;
+  const assigned = keyCode === code;
 
   return (
-    <footer className="editor-footer">
-      <div className="footer-keys">
+    <aside className="assign-panel">
+      <span className="assign-label">Macro</span>
+      <div className="assign-macro">
+        <span className={`slot-badge${badge ? " on" : " is-app"}`}>{badge ?? <Icon name="bolt" size={14} />}</span>
+        <span className="assign-macro-text">
+          <strong>{name || "Untitled"}</strong>
+          <KeyCaps steps={steps} max={3} />
+        </span>
+      </div>
+
+      <span className="assign-label">Key</span>
+      {selectedKey && current ? (
+        <div className="assign-key">
+          <kbd className="kcap big">{current.label || "—"}</kbd>
+          <span>
+            <strong>{current.title || "Nothing"}</strong>
+            <small>{layerName(layer)} layer</small>
+          </span>
+        </div>
+      ) : (
+        <p className="assign-empty">Click a key on the keyboard</p>
+      )}
+
+      {assigned ? (
+        <div className="assign-done">
+          <Icon name="check" size={14} /> On this key
+          {factory !== undefined && factory !== code && (
+            <button className="link-btn" onClick={() => void assignKey(layer, selectedKey!.row, selectedKey!.col, factory)}>
+              Reset key
+            </button>
+          )}
+        </div>
+      ) : (
+        <Button kind="primary" disabled={!selectedKey} onClick={() => selectedKey && void assignKey(layer, selectedKey.row, selectedKey.col, code).then((ok) => ok && toast(`${badge ?? name} is now on this key`, "success"))}>
+          Assign {badge ?? "macro"} to key
+        </Button>
+      )}
+
+      <div className="assign-used">
         {usedOn.length ? (
           <>
-            <span className="muted small">On</span>
+            <span className="muted small">Already on</span>
             {usedOn.slice(0, 4).map((u) => (
-              <button key={`${u.layer}-${u.key.id}`} className="chip" onClick={() => setState({ layer: u.layer, selection: { kind: "key", id: u.key.id } })} title={`Show on ${layerName(u.layer)}`}>
-                {keyName(u.key)} <small>{layerName(u.layer)}</small>
+              <button key={`${u.layer}-${u.key.id}`} className="chip" onClick={() => setState({ layer: u.layer, selection: { kind: "key", id: u.key.id } })} title="Select this key">
+                {keyLabel(model.defaults?.layers[0]?.[u.key.row * kb.cols + u.key.col] ?? 0, ctx, appMacros).title || `Key ${u.key.id}`} <small>{layerName(u.layer)}</small>
               </button>
             ))}
           </>
         ) : (
-          <span className="muted small">Not on a key yet</span>
+          <span className="muted small">Not on any key yet</span>
         )}
-        {selectedKey && keyCode !== undefined && keyCode !== code ? (
-          <Button small onClick={() => void assignKey(layer, selectedKey.row, selectedKey.col, code)}>
-            Put on {keyName(selectedKey)}
-          </Button>
-        ) : !selectedKey && !usedOn.length ? (
-          <span className="muted small">· click a key above to put it there</span>
-        ) : null}
       </div>
-      <span className="spacer" />
-      {bytes !== undefined && <span className="muted small">{bytes} bytes</span>}
-      {extra}
-    </footer>
+      {isApp && <p className="muted small assign-note">Works while Keychron Studio is running.</p>}
+    </aside>
   );
 }
 
