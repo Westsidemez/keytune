@@ -10,11 +10,20 @@ import { HYPER, MEH, MOD, withMods } from "./keycodes";
 export type AppMacroAction =
   | { type: "text"; text: string }
   | { type: "shortcut"; mods: ShortcutMod[]; key: string }
+  /** Press a key and keep it down until a matching "up" (or the end of the macro). */
+  | { type: "down"; key: string }
+  | { type: "up"; key: string }
   | { type: "delay"; ms: number }
   | { type: "open"; target: string }
   | { type: "shell"; command: string };
 
 export type ShortcutMod = "cmd" | "ctrl" | "alt" | "shift";
+
+/** Modifier keys that can be held or released, left and right. */
+export const MODIFIER_KEYS: Record<string, ShortcutMod> = { ctrl: "ctrl", alt: "alt", shift: "shift", cmd: "cmd", rctrl: "ctrl", ralt: "alt", rshift: "shift", rcmd: "cmd" };
+
+const MOD_SYMBOL: Record<ShortcutMod, string> = { cmd: "⌘", ctrl: "⌃", alt: "⌥", shift: "⇧" };
+const keyName = (key: string) => (MODIFIER_KEYS[key] ? `${key.startsWith("r") ? "Right " : ""}${MOD_SYMBOL[MODIFIER_KEYS[key]]}` : key.toUpperCase());
 
 export interface AppMacro {
   id: string;
@@ -73,7 +82,11 @@ export function describeAppAction(action: AppMacroAction): string {
     case "text":
       return action.text.length > 40 ? `Type “${action.text.slice(0, 40)}…”` : `Type “${action.text}”`;
     case "shortcut":
-      return `Press ${[...action.mods.map((m) => ({ cmd: "⌘", ctrl: "⌃", alt: "⌥", shift: "⇧" })[m]), action.key.toUpperCase()].join("")}`;
+      return `Press ${[...action.mods.map((m) => MOD_SYMBOL[m]), action.key.toUpperCase()].join("")}`;
+    case "down":
+      return `Hold ${keyName(action.key)}`;
+    case "up":
+      return `Release ${keyName(action.key)}`;
     case "delay":
       return `Wait ${action.ms} ms`;
     case "open":

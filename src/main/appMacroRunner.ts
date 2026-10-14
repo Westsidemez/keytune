@@ -1,9 +1,11 @@
 // Runs app macros when their trigger shortcut fires.
-// macOS: System Events (needs Accessibility) for keystrokes; Windows: SendKeys.
+// macOS: CoreGraphics key events via JavaScript for Automation (needs Accessibility);
+// Windows: keybd_event via PowerShell. Keys are sent as single down/up events so they can be held.
 
 import { clipboard, globalShortcut, shell, systemPreferences } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { triggerAccelerator, type AppMacro, type AppMacroAction, type ShortcutMod } from "../shared/appMacros";
+import { HeldKeys, isKeyAction, type KeyAction, type KeyOp } from "../shared/appKeyEvents";
 import type { AppMacroStatus } from "../shared/ipc";
 
 /** The trigger key is still held when the shortcut fires; wait for it to be released. */
@@ -17,13 +19,24 @@ const MAC_KEY_CODES: Record<string, number> = {
   ",": 43, "/": 44, n: 45, m: 46, ".": 47, tab: 48, space: 49, "`": 50, delete: 51, escape: 53,
   f1: 122, f2: 120, f3: 99, f4: 118, f5: 96, f6: 97, f7: 98, f8: 100, f9: 101, f10: 109, f11: 103, f12: 111,
   f13: 105, f14: 107, f15: 113, f16: 106, f17: 64, f18: 79, f19: 80, f20: 90,
+  cmd: 55, rcmd: 54, shift: 56, rshift: 60, alt: 58, ralt: 61, ctrl: 59, rctrl: 62,
   home: 115, pageup: 116, forwarddelete: 117, end: 119, pagedown: 121, left: 123, right: 124, down: 125, up: 126,
 };
 
-const WIN_KEYS: Record<string, string> = {
-  return: "{ENTER}", tab: "{TAB}", space: " ", delete: "{BACKSPACE}", escape: "{ESC}", forwarddelete: "{DELETE}",
-  home: "{HOME}", end: "{END}", pageup: "{PGUP}", pagedown: "{PGDN}", left: "{LEFT}", right: "{RIGHT}", up: "{UP}", down: "{DOWN}",
-};
+const MAC_FLAGS: Record<ShortcutMod, number> = { shift: 0x20000, ctrl: 0x40000, alt: 0x80000, cmd: 0x100000 };
+
+/** Windows virtual-key codes. */
+const WIN_VK: Record<string, number> = (() => {
+  const map: Record<string, number> = {
+    return: 0x0d, tab: 0x09, space: 0x20, delete: 0x08, escape: 0x1b, forwarddelete: 0x2e, home: 0x24, end: 0x23, pageup: 0x21, pagedown: 0x22,
+    left: 0x25, up: 0x26, right: 0x27, down: 0x28, "-": 0xbd, "=": 0xbb, "[": 0xdb, "]": 0xdd, "\\": 0xdc, ";": 0xba, "'": 0xde, "`": 0xc0, ",": 0xbc, ".": 0xbe, "/": 0xbf,
+    ctrl: 0xa2, rctrl: 0xa3, shift: 0xa0, rshift: 0xa1, alt: 0xa4, ralt: 0xa5, cmd: 0x5b, rcmd: 0x5c,
+  };
+  for (const c of "abcdefghijklmnopqrstuvwxyz") map[c] = c.toUpperCase().charCodeAt(0);
+  for (const c of "0123456789") map[c] = c.charCodeAt(0);
+  for (let i = 1; i <= 24; i++) map[`f${i}`] = 0x6f + i;
+  return map;
+})();
 
 export class AppMacroRunner {
   private macros: AppMacro[] = [];
@@ -74,7 +87,7 @@ export class AppMacroRunner {
     this.running = true;
     try {
       await sleep(delay);
-      for (const action of macro.actions) await this.perform(action);
+      await runActions(macro.actions);
     } catch (error) {
       this.log(`App macro "${macro.name}" failed: ${error instanceof Error ? error.message : String(error)}`);
       throw error;
@@ -82,56 +95,75 @@ export class AppMacroRunner {
       this.running = false;
     }
   }
+}
 
-  private async perform(action: AppMacroAction): Promise<void> {
-    switch (action.type) {
-      case "delay":
-        await sleep(Math.max(0, Math.min(60_000, action.ms)));
-        return;
-      case "open":
-        await openTarget(action.target);
-        return;
-      case "shell":
-        await runShell(action.command);
-        return;
-      case "text":
-        await pasteText(action.text);
-        return;
-      case "shortcut":
-        await pressShortcut(action.mods, action.key);
-        return;
+/** Run a macro. Consecutive key steps go out in one batch; held keys are released at the end. */
+export async function runActions(actions: AppMacroAction[], post: (ops: KeyOp[]) => Promise<void> = postKeys): Promise<void> {
+  const held = new HeldKeys();
+  let batch: KeyAction[] = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const ops = held.plan(batch);
+    batch = [];
+    await post(ops);
+  };
+  try {
+    for (const action of actions) {
+      if (isKeyAction(action)) {
+        batch.push(action);
+        continue;
+      }
+      await flush();
+      if (action.type === "open") await openTarget(action.target);
+      else if (action.type === "shell") await runShell(action.command);
+      else if (action.type === "text") {
+        // Pasting handles any characters (emoji, accents) and long text instantly.
+        const previous = clipboard.readText();
+        clipboard.writeText(action.text);
+        await post(held.plan([{ type: "shortcut", mods: [process.platform === "darwin" ? "cmd" : "ctrl"], key: "v" }]));
+        await sleep(350);
+        if (clipboard.readText() === action.text) clipboard.writeText(previous);
+      }
     }
+    await flush();
+  } finally {
+    if (held.size) await post(held.releaseAll()).catch(() => undefined);
   }
 }
 
-async function pasteText(text: string): Promise<void> {
-  // Pasting handles any characters (emoji, accents) and long text instantly.
-  const previous = clipboard.readText();
-  clipboard.writeText(text);
-  await pressShortcut(process.platform === "darwin" ? ["cmd"] : ["ctrl"], "v");
-  await sleep(350);
-  if (clipboard.readText() === text) clipboard.writeText(previous);
-}
-
-async function pressShortcut(mods: ShortcutMod[], key: string): Promise<void> {
-  const name = key.toLowerCase();
+/** Send key events to the system. */
+async function postKeys(ops: KeyOp[]): Promise<void> {
+  if (!ops.length) return;
+  const waitMs = ops.reduce((n, op) => n + (op.kind === "wait" ? op.ms : 0), 0);
+  const timeout = 10_000 + waitMs;
   if (process.platform === "darwin") {
-    const code = MAC_KEY_CODES[name];
-    if (code === undefined) throw new Error(`Unknown key ${key}`);
-    const using = mods.map((m) => ({ cmd: "command down", ctrl: "control down", alt: "option down", shift: "shift down" })[m]);
-    const script = `tell application "System Events" to key code ${code}${using.length ? ` using {${using.join(", ")}}` : ""}`;
-    await execFileAsync("osascript", ["-e", script]);
+    const lines = ops.map((op) => {
+      if (op.kind === "wait") return `delay(${op.ms / 1000});`;
+      const code = MAC_KEY_CODES[op.key];
+      if (code === undefined) throw new Error(`Unknown key ${op.key}`);
+      const flags = op.mods.reduce((f, m) => f | MAC_FLAGS[m], 0);
+      return `post(${code}, ${op.down}, ${flags}); delay(0.008);`;
+    });
+    const script = [
+      "ObjC.import('CoreGraphics');",
+      "function post(code, down, flags) { var e = $.CGEventCreateKeyboardEvent(null, code, down); $.CGEventSetFlags(e, flags); $.CGEventPost($.kCGHIDEventTap, e); }",
+      ...lines,
+    ].join("\n");
+    await execFileAsync("osascript", ["-l", "JavaScript", "-e", script], timeout);
     return;
   }
   if (process.platform === "win32") {
-    if (mods.includes("cmd")) throw new Error("The Windows key cannot be pressed by app macros");
-    const prefix = mods.map((m) => ({ ctrl: "^", alt: "%", shift: "+", cmd: "" })[m]).join("");
-    const keyText = WIN_KEYS[name] ?? (/^f\d+$/.test(name) ? `{${name.toUpperCase()}}` : name.replace(/[+^%~(){}[\]]/g, (c) => `{${c}}`));
-    const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${(prefix + keyText).replace(/'/g, "''")}')`;
-    await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+    const lines = ops.map((op) => {
+      if (op.kind === "wait") return `Start-Sleep -Milliseconds ${Math.round(op.ms)}`;
+      const vk = WIN_VK[op.key];
+      if (vk === undefined) throw new Error(`Unknown key ${op.key}`);
+      return `[W.K]::keybd_event(${vk}, 0, ${op.down ? 0 : 2}, [UIntPtr]::Zero); Start-Sleep -Milliseconds 8`;
+    });
+    const script = [`Add-Type -Name K -Namespace W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);'`, ...lines].join("; ");
+    await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], timeout);
     return;
   }
-  throw new Error("App macro shortcuts are not supported on this system");
+  throw new Error("App macro key presses are not supported on this system");
 }
 
 async function openTarget(target: string): Promise<void> {
@@ -169,9 +201,9 @@ function runShell(command: string): Promise<void> {
   });
 }
 
-function execFileAsync(file: string, args: string[]): Promise<void> {
+function execFileAsync(file: string, args: string[], timeout = 10_000): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { timeout: 10_000 }, (error, _stdout, stderr) => {
+    execFile(file, args, { timeout }, (error, _stdout, stderr) => {
       if (error) reject(new Error(stderr?.trim() || error.message));
       else resolve();
     });

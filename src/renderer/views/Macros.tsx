@@ -1,6 +1,6 @@
 // Macros: a library of onboard and app macros, a step editor (or code), and a key palette.
 // Layout follows Keychron Launcher: library on the left, editor in the middle, keys on the right.
-// Onboard and app macros share one editor; app macros add Open and Command steps but can't hold keys.
+// Onboard and app macros share one editor; app macros add Open and Command steps.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { actionsToSteps, decodeMacroSteps, encodeMacroSteps, macroBufferBytes, untypeableCharacters, type MacroAction, type MacroStep } from "../../shared/macros";
@@ -690,8 +690,15 @@ const APP_KEY_CODES = Object.keys(HID_TO_APP_KEY).map(Number);
 const MOD_FOR_HID: Record<number, ShortcutMod> = { 0xe0: "ctrl", 0xe4: "ctrl", 0xe1: "shift", 0xe5: "shift", 0xe2: "alt", 0xe6: "alt", 0xe3: "cmd", 0xe7: "cmd" };
 const HID_FOR_MOD: Record<ShortcutMod, number> = { ctrl: 0xe0, shift: 0xe1, alt: 0xe2, cmd: 0xe3 };
 
+/** HID modifier usage → app macro modifier key name (left and right). */
+const HID_TO_APP_MOD: Record<number, string> = { 0xe0: "ctrl", 0xe1: "shift", 0xe2: "alt", 0xe3: "cmd", 0xe4: "rctrl", 0xe5: "rshift", 0xe6: "ralt", 0xe7: "rcmd" };
+const APP_MOD_TO_HID: Record<string, number> = Object.fromEntries(Object.entries(HID_TO_APP_MOD).map(([code, name]) => [name, Number(code)]));
+/** The app macro name for any key it can press, modifiers included. */
+const appKeyFor = (code: number): string | undefined => HID_TO_APP_KEY[code] ?? HID_TO_APP_MOD[code];
+
 function appToSteps(actions: AppMacroAction[]): EStep[] {
   return actions.map((a): EStep => {
+    if (a.type === "down" || a.type === "up") return { type: a.type, key: APP_KEY_TO_HID[a.key] ?? APP_MOD_TO_HID[a.key] ?? kc("LSFT") };
     if (a.type !== "shortcut") return a;
     const key = APP_KEY_TO_HID[a.key] ?? kc("A");
     return a.mods.length ? { type: "shortcut", mods: a.mods.map((m) => HID_FOR_MOD[m]), key } : { type: "tap", key };
@@ -701,22 +708,28 @@ function appToSteps(actions: AppMacroAction[]): EStep[] {
 function stepsToApp(steps: EStep[]): AppMacroAction[] {
   const out: AppMacroAction[] = [];
   for (const s of steps) {
-    if (s.type === "tap" || s.type === "shortcut") {
+    if (s.type === "tap" && HID_TO_APP_MOD[s.key]) {
+      // Tapping a modifier on its own: press and release it.
+      out.push({ type: "down", key: HID_TO_APP_MOD[s.key] }, { type: "up", key: HID_TO_APP_MOD[s.key] });
+    } else if (s.type === "tap" || s.type === "shortcut") {
       const key = HID_TO_APP_KEY[s.key];
       if (!key) continue;
       const mods = s.type === "shortcut" ? [...new Set(s.mods.map((m) => MOD_FOR_HID[m]).filter(Boolean))] : [];
       out.push({ type: "shortcut", mods, key });
+    } else if (s.type === "down" || s.type === "up") {
+      const key = appKeyFor(s.key);
+      if (key) out.push({ type: s.type, key });
     } else if (s.type === "text" || s.type === "delay" || s.type === "open" || s.type === "shell") out.push(s);
   }
   return out;
 }
 
-/** Steps the app can run: holds and releases become taps where possible, the rest are dropped. */
+/** Steps the app can run; keys it can't press are dropped. */
 function forApp(steps: MacroStep[]): { steps: EStep[]; dropped: number } {
   let dropped = 0;
   const out: EStep[] = [];
   for (const s of steps) {
-    if ((s.type === "tap" || s.type === "shortcut") && HID_TO_APP_KEY[s.key]) out.push(s);
+    if (s.type === "tap" || s.type === "down" || s.type === "up" ? appKeyFor(s.key) : s.type === "shortcut" ? HID_TO_APP_KEY[s.key] : false) out.push(s);
     else if (s.type === "text" || s.type === "delay") out.push(s);
     else dropped++;
   }
@@ -769,7 +782,7 @@ function AppWorkbench({ macro, ...shared }: { macro: AppMacro } & SharedProps) {
           )}
         </>
       }
-      note={`The key sends ${triggerAccelerator(macro.trigger).replace(/\+/g, " + ")}, which this app turns into these steps while it runs (it can stay in the menu bar). App macros press keys as taps and shortcuts; they can't hold a key down.`}
+      note={`The key sends ${triggerAccelerator(macro.trigger).replace(/\+/g, " + ")}, which this app turns into these steps while it runs (it can stay in the menu bar).`}
       footer={
         <>
           <Button
@@ -813,8 +826,8 @@ const STEP_KIND: Record<EStep["type"], string> = { tap: "Tap", down: "Hold", up:
 
 const ADD_STEPS: { label: string; icon: keyof typeof ICONS; title: string; modes: Mode[]; make: () => EStep }[] = [
   { label: "Tap", icon: "keyTap", title: "Press and release a key", modes: ["onboard", "app"], make: () => ({ type: "tap", key: kc("ENT") }) },
-  { label: "Hold", icon: "keyDown", title: "Press a key and keep it down", modes: ["onboard"], make: () => ({ type: "down", key: kc("LSFT") }) },
-  { label: "Release", icon: "keyUp", title: "Let go of a held key", modes: ["onboard"], make: () => ({ type: "up", key: kc("LSFT") }) },
+  { label: "Hold", icon: "keyDown", title: "Press a key and keep it down", modes: ["onboard", "app"], make: () => ({ type: "down", key: kc("LSFT") }) },
+  { label: "Release", icon: "keyUp", title: "Let go of a held key", modes: ["onboard", "app"], make: () => ({ type: "up", key: kc("LSFT") }) },
   { label: "Shortcut", icon: "combo", title: "Modifiers held around one key, e.g. ⌘C", modes: ["onboard", "app"], make: () => ({ type: "shortcut", mods: [kc("LGUI")], key: kc("C") }) },
   { label: "Text", icon: "text", title: "Type some text", modes: ["onboard", "app"], make: () => ({ type: "text", text: "" }) },
   { label: "Wait", icon: "clock", title: "Pause before the next step", modes: ["onboard", "app"], make: () => ({ type: "delay", ms: 100 }) },
@@ -858,7 +871,7 @@ function Workbench({
     if (!more.length) return;
     if (!isApp) return onChange([...steps, ...more]);
     const { steps: usable, dropped } = forApp(more);
-    if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can only tap keys and shortcuts, not hold them.`);
+    if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can't press those keys.`);
     onChange([...steps, ...usable]);
   };
   const recorder = useRecorder(delayMode, fixedMs, append);
@@ -893,7 +906,7 @@ function Workbench({
       codeInsert.current?.(addKind === "tap" || isApp ? `{${name}}` : `{${addKind === "down" ? "+" : "-"}${name}}`);
       return;
     }
-    const usable = !isApp || HID_TO_APP_KEY[key] !== undefined;
+    const usable = !isApp || appKeyFor(key) !== undefined;
     if (editsKey && active !== null) {
       const s = activeStep;
       if (isModifierKey(key) && (s.type === "tap" || s.type === "shortcut")) {
@@ -903,13 +916,12 @@ function Workbench({
         update(active, next.length ? { type: "shortcut", mods: next, key: s.key } : { type: "tap", key: s.key });
         return;
       }
-      if (!usable) return void toast("App macros can't press that key");
+      if (!usable || (isApp && s.type === "shortcut" && !HID_TO_APP_KEY[key])) return void toast("App macros can't press that key");
       update(active, { ...s, key });
       return;
     }
-    if (isApp && isModifierKey(key)) return void toast("Select a Tap or Shortcut step first, then click modifiers to add them to it");
     if (!usable) return void toast("App macros can't press that key");
-    onChange([...steps, { type: isApp ? "tap" : addKind, key }]);
+    onChange([...steps, { type: addKind, key }]);
   };
 
   const hint =
@@ -1053,7 +1065,7 @@ function Workbench({
               onApply={(next) => {
                 if (!isApp) return onChange(next);
                 const { steps: usable, dropped } = forApp(next);
-                if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can only tap keys and shortcuts, not hold them.`);
+                if (dropped) toast(`${dropped} step${dropped === 1 ? "" : "s"} left out: app macros can't press those keys.`);
                 onChange(usable);
               }}
               insertRef={codeInsert}
@@ -1063,7 +1075,7 @@ function Workbench({
           <EditorFooter isApp={isApp} bytes={isApp ? undefined : encodeMacroSteps(steps as MacroStep[]).length} extra={footer} />
         </div>
       </section>
-      <KeyPalette onPick={pickKey} addKind={addKind} setAddKind={setAddKind} hint={hint} showKind={!isApp && !editsKey} />
+      <KeyPalette onPick={pickKey} addKind={addKind} setAddKind={setAddKind} hint={hint} showKind={!editsKey} />
     </>
   );
 }
@@ -1161,11 +1173,13 @@ function AssignPanel({ code, badge, name, steps, isApp, selectedKey }: { code: n
 
 const MODIFIERS = [kc("LCTL"), kc("LALT"), kc("LSFT"), kc("LGUI")];
 
-function AppKeySelect({ value, onChange }: { value: number; onChange: (code: number) => void }) {
+const APP_MOD_CODES = Object.keys(HID_TO_APP_MOD).map(Number);
+
+function AppKeySelect({ value, onChange, modifiers }: { value: number; onChange: (code: number) => void; modifiers?: boolean }) {
   const platform = useStudio((s) => labelContext(s).platform);
   return (
     <select value={value} onChange={(e) => onChange(Number(e.target.value))}>
-      {APP_KEY_CODES.map((c) => (
+      {(modifiers ? [...APP_MOD_CODES, ...APP_KEY_CODES] : APP_KEY_CODES).map((c) => (
         <option key={c} value={c}>
           {describe(c, { platform }).title}
         </option>
@@ -1220,16 +1234,12 @@ function StepEditor({ mode, step, onChange }: { mode: Mode; step: EStep; onChang
     case "up":
       return (
         <>
-          {mode === "onboard" ? (
-            <select className="step-kind-select" value={step.type} onChange={(e) => onChange({ ...step, type: e.target.value as "tap" })}>
-              <option value="tap">Tap</option>
-              <option value="down">Hold</option>
-              <option value="up">Release</option>
-            </select>
-          ) : (
-            <span className="step-kind">Tap</span>
-          )}
-          <KeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />
+          <select className="step-kind-select" value={step.type} onChange={(e) => onChange({ ...step, type: e.target.value as "tap" })}>
+            <option value="tap">Tap</option>
+            <option value="down">Hold</option>
+            <option value="up">Release</option>
+          </select>
+          {mode === "app" ? <AppKeySelect modifiers value={step.key} onChange={(key) => onChange({ ...step, key })} /> : <BasicKeySelect value={step.key} onChange={(key) => onChange({ ...step, key })} />}
         </>
       );
     case "delay":
