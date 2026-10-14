@@ -1,15 +1,18 @@
 // Runs app macros when their trigger shortcut fires.
 // macOS: CoreGraphics key events via JavaScript for Automation (needs Accessibility);
 // Windows: keybd_event via PowerShell. Keys are sent as single down/up events so they can be held.
+// Both run in one long-lived helper process, so a macro doesn't pay for starting a script each time.
 
 import { clipboard, globalShortcut, shell, systemPreferences } from "electron";
-import { execFile, spawn } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { triggerAccelerator, type AppMacro, type AppMacroAction, type ShortcutMod } from "../shared/appMacros";
 import { HeldKeys, isKeyAction, type KeyAction, type KeyOp } from "../shared/appKeyEvents";
 import type { AppMacroStatus } from "../shared/ipc";
 
-/** The trigger key is still held when the shortcut fires; wait for it to be released. */
-const RELEASE_DELAY_MS = 180;
+/** The trigger keys are still down when the shortcut fires; wait (at most this long) for them to be released. */
+const RELEASE_WAIT_MAX_MS = 400;
+/** Time the target app gets to read a pasted text before the clipboard is restored. */
+const PASTE_SETTLE_MS = 350;
 const SHELL_TIMEOUT_MS = 60_000;
 
 const MAC_KEY_CODES: Record<string, number> = {
@@ -24,6 +27,7 @@ const MAC_KEY_CODES: Record<string, number> = {
 };
 
 const MAC_FLAGS: Record<ShortcutMod, number> = { shift: 0x20000, ctrl: 0x40000, alt: 0x80000, cmd: 0x100000 };
+const MAC_MOD_MASK = 0x1e0000;
 
 /** Windows virtual-key codes. */
 const WIN_VK: Record<string, number> = (() => {
@@ -37,6 +41,150 @@ const WIN_VK: Record<string, number> = (() => {
   for (let i = 1; i <= 24; i++) map[`f${i}`] = 0x6f + i;
   return map;
 })();
+/** Windows generic Ctrl, Alt, Shift and both Windows keys. */
+const WIN_MOD_VKS = [0x11, 0x12, 0x10, 0x5b, 0x5c];
+
+/** A request to the key helper: wait for keys to be let go, then post key events ([code, down, flags] or [-ms] to wait). */
+interface KeyRequest {
+  release?: { keys: number[]; mods: number; maxMs: number };
+  ops: ([number, boolean, number] | [number])[];
+}
+
+// Reads one JSON request per line and answers "ok" or "err <message>".
+const MAC_HELPER = String.raw`
+ObjC.import('Foundation'); ObjC.import('CoreGraphics');
+var input = $.NSFileHandle.fileHandleWithStandardInput, output = $.NSFileHandle.fileHandleWithStandardOutput, buf = '';
+function reply(s) { output.writeData($(s + '\n').dataUsingEncoding($.NSUTF8StringEncoding)); }
+function held(r) {
+  if ($.CGEventSourceFlagsState(1) & r.mods) return true;
+  for (var i = 0; i < r.keys.length; i++) if ($.CGEventSourceKeyState(1, r.keys[i])) return true;
+  return false;
+}
+function perform(req) {
+  if (req.release) { var end = Date.now() + req.release.maxMs; while (Date.now() < end && held(req.release)) delay(0.004); }
+  for (var i = 0; i < req.ops.length; i++) {
+    var op = req.ops[i];
+    if (op.length === 1) { delay(op[0] / 1000); continue; }
+    var e = $.CGEventCreateKeyboardEvent(null, op[0], op[1]);
+    $.CGEventSetFlags(e, op[2]);
+    $.CGEventPost($.kCGHIDEventTap, e);
+    delay(0.003);
+  }
+}
+// Load the CoreGraphics calls now rather than on the first macro.
+held({ mods: 0, keys: [0] });
+$.CGEventCreateKeyboardEvent(null, 0, true);
+while (true) {
+  var data = input.availableData;
+  if (Number(data.length) === 0) break;
+  buf += $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js;
+  var nl;
+  while ((nl = buf.indexOf('\n')) >= 0) {
+    var line = buf.slice(0, nl);
+    buf = buf.slice(nl + 1);
+    try { perform(JSON.parse(line)); reply('ok'); } catch (err) { reply('err ' + String(err).replace(/\n/g, ' ')); }
+  }
+}
+`;
+
+const WIN_HELPER = String.raw`
+Add-Type -Name K -Namespace W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra); [DllImport("user32.dll")] public static extern short GetAsyncKeyState(int vk);'
+while ($null -ne ($line = [Console]::In.ReadLine())) {
+  try {
+    $req = ConvertFrom-Json $line
+    if ($req.release) {
+      $keys = @($req.release.keys)
+      $sw = [Diagnostics.Stopwatch]::StartNew()
+      while ($sw.ElapsedMilliseconds -lt $req.release.maxMs -and @($keys | Where-Object { [W.K]::GetAsyncKeyState($_) -band 0x8000 }).Count) { Start-Sleep -Milliseconds 4 }
+    }
+    foreach ($op in @($req.ops)) {
+      if ($op.Count -eq 1) { Start-Sleep -Milliseconds $op[0]; continue }
+      [W.K]::keybd_event($op[0], 0, $(if ($op[1]) { 0 } else { 2 }), [UIntPtr]::Zero)
+      Start-Sleep -Milliseconds 3
+    }
+    [Console]::Out.WriteLine('ok')
+  } catch { [Console]::Out.WriteLine('err ' + $_.Exception.Message) }
+}
+`;
+
+/** The long-lived process that posts key events. Requests are answered in order. */
+class KeyHelper {
+  private child?: ChildProcessWithoutNullStreams;
+  private pending: { resolve: () => void; reject: (e: Error) => void; timer: NodeJS.Timeout }[] = [];
+  private out = "";
+
+  /** Start the helper ahead of the first macro so it is already warm. */
+  warm(): void {
+    if (process.platform === "darwin" || process.platform === "win32") this.process();
+  }
+
+  send(req: KeyRequest): Promise<void> {
+    const waitMs = req.ops.reduce((n, op) => n + (op.length === 1 ? op[0] : 0), 0) + (req.release?.maxMs ?? 0);
+    const child = this.process();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => this.fail(new Error("Key helper stopped responding")), 10_000 + waitMs);
+      this.pending.push({ resolve, reject, timer });
+      child.stdin.write(`${JSON.stringify(req)}\n`);
+    });
+  }
+
+  dispose(): void {
+    this.child?.kill();
+    this.child = undefined;
+  }
+
+  private process(): ChildProcessWithoutNullStreams {
+    if (this.child) return this.child;
+    let child: ChildProcessWithoutNullStreams;
+    if (process.platform === "darwin") child = spawn("osascript", ["-l", "JavaScript", "-e", MAC_HELPER]);
+    else if (process.platform === "win32") child = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN_HELPER], { windowsHide: true });
+    else throw new Error("App macro key presses are not supported on this system");
+    this.child = child;
+    this.out = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      this.out += chunk;
+      let nl: number;
+      while ((nl = this.out.indexOf("\n")) >= 0) {
+        const line = this.out.slice(0, nl).trim();
+        this.out = this.out.slice(nl + 1);
+        const next = this.pending.shift();
+        if (!next) continue;
+        clearTimeout(next.timer);
+        if (line === "ok") next.resolve();
+        else next.reject(new Error(line.replace(/^err /, "")));
+      }
+    });
+    child.stderr.on("data", (d) => (stderr = (stderr + String(d)).slice(-2000)));
+    child.stdin.on("error", () => undefined);
+    const ended = (reason: string) => {
+      if (this.child !== child) return;
+      this.child = undefined;
+      this.rejectAll(new Error(stderr.trim() || reason));
+    };
+    child.on("error", (e) => ended(e.message));
+    child.on("exit", (code) => ended(`Key helper exited with ${code}`));
+    return child;
+  }
+
+  private fail(error: Error): void {
+    this.dispose();
+    this.rejectAll(error);
+  }
+
+  private rejectAll(error: Error): void {
+    for (const p of this.pending.splice(0)) {
+      clearTimeout(p.timer);
+      p.reject(error);
+    }
+  }
+}
+
+const keyHelper = new KeyHelper();
+
+/** The clipboard as it was before a macro pasted text, put back once the paste has been read. */
+const pasted = { previous: undefined as string | undefined, text: "", at: 0, timer: undefined as NodeJS.Timeout | undefined };
 
 export class AppMacroRunner {
   private macros: AppMacro[] = [];
@@ -56,6 +204,13 @@ export class AppMacroRunner {
     }
     this.macros = macros;
     this.failed = [];
+    if (macros.length) {
+      try {
+        keyHelper.warm();
+      } catch {
+        // Unsupported system; running a macro reports it.
+      }
+    }
     for (const macro of macros) {
       let accelerator = "";
       try {
@@ -81,12 +236,13 @@ export class AppMacroRunner {
     return this.status();
   }
 
-  async run(id: string, delay = RELEASE_DELAY_MS): Promise<void> {
+  /** Run a macro. `fromTrigger`: started by its shortcut, so wait for the trigger keys to be let go first. */
+  async run(id: string, fromTrigger = true): Promise<void> {
     const macro = this.macros.find((m) => m.id === id);
     if (!macro || this.running) return;
     this.running = true;
     try {
-      await sleep(delay);
+      if (fromTrigger) await keyHelper.send({ release: triggerRelease(macro.trigger), ops: [] });
       await runActions(macro.actions);
     } catch (error) {
       this.log(`App macro "${macro.name}" failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -95,6 +251,18 @@ export class AppMacroRunner {
       this.running = false;
     }
   }
+
+  dispose(): void {
+    keyHelper.dispose();
+  }
+}
+
+/** Keys of a trigger the helper waits on: all modifiers plus the F key. */
+function triggerRelease(trigger: number): KeyRequest["release"] & {} {
+  const fKey = `f${13 + (trigger & 0xff) - 0x68}`;
+  if (process.platform === "win32") return { keys: [...WIN_MOD_VKS, WIN_VK[fKey]], mods: 0, maxMs: RELEASE_WAIT_MAX_MS };
+  const code = MAC_KEY_CODES[fKey];
+  return { keys: code === undefined ? [] : [code], mods: MAC_MOD_MASK, maxMs: RELEASE_WAIT_MAX_MS };
 }
 
 /** Run a macro. Consecutive key steps go out in one batch; held keys are released at the end. */
@@ -117,12 +285,19 @@ export async function runActions(actions: AppMacroAction[], post: (ops: KeyOp[])
       if (action.type === "open") await openTarget(action.target);
       else if (action.type === "shell") await runShell(action.command);
       else if (action.type === "text") {
-        // Pasting handles any characters (emoji, accents) and long text instantly.
-        const previous = clipboard.readText();
+        // Pasting handles any characters (emoji, accents) and long text instantly. Later key
+        // events queue behind the paste, so only a second paste has to wait for the first to be read.
+        if (pasted.timer) {
+          clearTimeout(pasted.timer);
+          pasted.timer = undefined;
+          await sleep(pasted.at + PASTE_SETTLE_MS - Date.now());
+        }
+        if (pasted.previous === undefined) pasted.previous = clipboard.readText();
         clipboard.writeText(action.text);
         await post(held.plan([{ type: "shortcut", mods: [process.platform === "darwin" ? "cmd" : "ctrl"], key: "v" }]));
-        await sleep(350);
-        if (clipboard.readText() === action.text) clipboard.writeText(previous);
+        pasted.text = action.text;
+        pasted.at = Date.now();
+        pasted.timer = setTimeout(restoreClipboard, PASTE_SETTLE_MS);
       }
     }
     await flush();
@@ -131,39 +306,25 @@ export async function runActions(actions: AppMacroAction[], post: (ops: KeyOp[])
   }
 }
 
+function restoreClipboard(): void {
+  if (pasted.previous !== undefined && clipboard.readText() === pasted.text) clipboard.writeText(pasted.previous);
+  pasted.previous = undefined;
+  pasted.timer = undefined;
+}
+
 /** Send key events to the system. */
 async function postKeys(ops: KeyOp[]): Promise<void> {
   if (!ops.length) return;
-  const waitMs = ops.reduce((n, op) => n + (op.kind === "wait" ? op.ms : 0), 0);
-  const timeout = 10_000 + waitMs;
-  if (process.platform === "darwin") {
-    const lines = ops.map((op) => {
-      if (op.kind === "wait") return `delay(${op.ms / 1000});`;
-      const code = MAC_KEY_CODES[op.key];
+  const mac = process.platform === "darwin";
+  const codes = mac ? MAC_KEY_CODES : WIN_VK;
+  await keyHelper.send({
+    ops: ops.map((op) => {
+      if (op.kind === "wait") return [Math.round(op.ms)];
+      const code = codes[op.key];
       if (code === undefined) throw new Error(`Unknown key ${op.key}`);
-      const flags = op.mods.reduce((f, m) => f | MAC_FLAGS[m], 0);
-      return `post(${code}, ${op.down}, ${flags}); delay(0.008);`;
-    });
-    const script = [
-      "ObjC.import('CoreGraphics');",
-      "function post(code, down, flags) { var e = $.CGEventCreateKeyboardEvent(null, code, down); $.CGEventSetFlags(e, flags); $.CGEventPost($.kCGHIDEventTap, e); }",
-      ...lines,
-    ].join("\n");
-    await execFileAsync("osascript", ["-l", "JavaScript", "-e", script], timeout);
-    return;
-  }
-  if (process.platform === "win32") {
-    const lines = ops.map((op) => {
-      if (op.kind === "wait") return `Start-Sleep -Milliseconds ${Math.round(op.ms)}`;
-      const vk = WIN_VK[op.key];
-      if (vk === undefined) throw new Error(`Unknown key ${op.key}`);
-      return `[W.K]::keybd_event(${vk}, 0, ${op.down ? 0 : 2}, [UIntPtr]::Zero); Start-Sleep -Milliseconds 8`;
-    });
-    const script = [`Add-Type -Name K -Namespace W -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);'`, ...lines].join("; ");
-    await execFileAsync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], timeout);
-    return;
-  }
-  throw new Error("App macro key presses are not supported on this system");
+      return [code, op.down, mac ? op.mods.reduce((f, m) => f | MAC_FLAGS[m], 0) : 0];
+    }),
+  });
 }
 
 async function openTarget(target: string): Promise<void> {
@@ -211,5 +372,5 @@ function execFileAsync(file: string, args: string[], timeout = 10_000): Promise<
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((r) => setTimeout(r, Math.max(0, ms)));
 }

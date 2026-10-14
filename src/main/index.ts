@@ -154,7 +154,7 @@ function setupTray(): void {
         { label: "Open Keychron Studio", click: () => showWindow() },
         { type: "separator" },
         { label: macros.length ? `${macros.length} app macro${macros.length === 1 ? "" : "s"} active` : "No app macros", enabled: false },
-        ...macros.slice(0, 12).map((m) => ({ label: `Run “${m.name}”`, click: () => void runner.run(m.id, 0).catch(() => undefined) })),
+        ...macros.slice(0, 12).map((m) => ({ label: `Run “${m.name}”`, click: () => void runner.run(m.id, false).catch(() => undefined) })),
         { type: "separator" },
         {
           label: "Quit",
@@ -212,7 +212,7 @@ function setupIpc(): void {
   ipcMain.handle("definitions:fetchVia", (_e, vendorId: number, productId: number) => fetchViaDefinition(vendorId, productId));
   ipcMain.handle("appMacros:status", () => runner.status());
   ipcMain.handle("appMacros:requestAccess", () => runner.requestAccessibility());
-  ipcMain.handle("appMacros:run", (_e, id: string) => runner.run(id, 0));
+  ipcMain.handle("appMacros:run", (_e, id: string) => runner.run(id, false));
   ipcMain.handle("hid:scan", async (event) => {
     // requestDevice needs a user gesture; executeJavaScript can supply one.
     await event.sender.executeJavaScript(
@@ -325,6 +325,8 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   quitting = true;
 });
+
+app.on("will-quit", () => runner.dispose());
 
 app.on("window-all-closed", () => {
   if (!isMac && !tray) app.quit();
