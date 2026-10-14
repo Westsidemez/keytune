@@ -5,6 +5,8 @@ import type { LayoutKey } from "../../shared/layout";
 import type { KeyLabel } from "../../shared/keycodes";
 import { keyLabel } from "../labels";
 import { createPreview } from "../preview";
+import { GLOW_PX_PER_UNIT, paintGlow } from "../glow";
+import { motionAllowed, onMotionChange, reducedMotion } from "../motion";
 import { labelPlatform, macroNames, useStudio } from "../store";
 
 export const KEYCODE_MIME = "application/x-keychron-keycode";
@@ -79,31 +81,61 @@ export function KeyboardView(props: KeyboardViewProps) {
     () => (lit && model && kb && lighting ? createPreview({ layout: model.layout, model, lighting, ledMap: kb.ledMap, cols: kb.cols }) : null),
     [lit, model, kb?.ledMap, kb?.cols, lighting],
   );
+  // Keys get a flat tint (cheap to repaint); the glow is one blurred canvas behind them.
+  const glow = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const els = keyEls.current;
-    if (!preview) {
-      for (const el of els.values()) el.style.removeProperty("--led");
+    const glowEl = glow.current;
+    if (!preview || !layout) {
+      for (const el of els.values()) {
+        el.classList.remove("led-on");
+        el.style.removeProperty("--led");
+      }
       return;
     }
-    let frame = 0;
-    let last = 0;
+    const written = new Map<string, string>();
     const smoke = new URLSearchParams(location.search).has("smoke");
     const start = performance.now();
-    const tick = (now: number) => {
-      frame = requestAnimationFrame(tick);
-      if (now - last < 33) return;
-      last = now;
-      const colours = preview(smoke ? 1.2 : (now - start) / 1000);
+    const draw = (t: number) => {
+      const colours = preview(t);
       for (const [id, rgb] of colours) {
         const el = els.get(id);
         if (!el) continue;
-        if (rgb) el.style.setProperty("--led", `${rgb[0]} ${rgb[1]} ${rgb[2]}`);
-        else el.style.removeProperty("--led");
+        const value = rgb && (rgb[0] || rgb[1] || rgb[2]) ? `${rgb[0]} ${rgb[1]} ${rgb[2]}` : "";
+        if (written.get(id) === value) continue;
+        written.set(id, value);
+        if (value) {
+          el.style.setProperty("--led", value);
+          el.classList.add("led-on");
+        } else {
+          el.classList.remove("led-on");
+          el.style.removeProperty("--led");
+        }
       }
+      if (glowEl) paintGlow(glowEl, layout, colours);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [preview]);
+    const now = () => (smoke ? 1.2 : reducedMotion() ? 1.2 : (performance.now() - start) / 1000);
+    let frame = 0;
+    let last = 0;
+    const tick = (time: number) => {
+      frame = requestAnimationFrame(tick);
+      if (time - last < 33) return;
+      last = time;
+      draw(now());
+    };
+    const update = () => {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      draw(now());
+      if (!smoke && motionAllowed()) frame = requestAnimationFrame(tick);
+    };
+    update();
+    const off = onMotionChange(update);
+    return () => {
+      off();
+      cancelAnimationFrame(frame);
+    };
+  }, [preview, layout]);
 
   useEffect(() => {
     if (mode !== "paint") return;
@@ -133,6 +165,15 @@ export function KeyboardView(props: KeyboardViewProps) {
   return (
     <div className="keyboard-host" ref={host}>
       <div className={`keyboard mode-${mode}${lit ? " lit" : ""}${quietLegends ? " quiet" : ""}`} style={{ padding: pad, "--u": `${unit}px` } as React.CSSProperties}>
+        {lit && (
+          <canvas
+            ref={glow}
+            className="key-glow"
+            width={Math.ceil(layout.width * GLOW_PX_PER_UNIT)}
+            height={Math.ceil(layout.height * GLOW_PX_PER_UNIT)}
+            style={{ left: pad, top: pad, width: layout.width * unit, height: layout.height * unit }}
+          />
+        )}
         <div className="plate" style={{ width: layout.width * unit, height: layout.height * unit }}>
         {layout.keys.map((key) => {
           const isEncoder = key.encoder !== undefined;
