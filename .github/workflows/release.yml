@@ -21,6 +21,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npm run package:mac
+      # Seal the bundle with an ad-hoc signature: no certificate, name or team, just what Apple silicon needs to run it.
+      - run: codesign --force --deep --sign - release/Keytune-darwin-arm64/Keytune.app && codesign --verify --deep --strict release/Keytune-darwin-arm64/Keytune.app
       - run: ditto -c -k --keepParent release/Keytune-darwin-arm64/Keytune.app "Keytune-${GITHUB_REF_NAME}-macos-arm64.zip"
       - uses: softprops/action-gh-release@v2
         with:

@@ -43,7 +43,7 @@ Keytune is early (0.x). Development so far has been tested against a faithful si
 
 ## Install
 
-Download the latest build from [Releases](../../releases). Builds are not signed with an Apple Developer ID yet, so the first time you open the app, right-click it in Finder and choose **Open**.
+Download the latest build from [Releases](../../releases), unzip it and move Keytune to Applications. Builds are not signed with an Apple Developer ID, so macOS blocks the first launch. Open the app once, then go to System Settings → Privacy & Security and click **Open Anyway** next to the Keytune message. (On macOS 14 and earlier you can instead right-click the app in Finder and choose **Open**.)
 
 ## Build from source
 
