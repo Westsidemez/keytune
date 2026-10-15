@@ -65,7 +65,7 @@ function createWindow(): BrowserWindow {
     if (!smoke) win.show();
   });
   win.on("close", (event) => {
-    if (!quitting && storage.settings().keepInMenuBar && storage.settings().appMacros.length > 0) {
+    if (!quitting && storage.settings().keepInMenuBar) {
       event.preventDefault();
       win.hide();
       if (isMac) app.dock?.hide();
@@ -172,7 +172,7 @@ function setupTray(): void {
         ...macros.slice(0, 12).map((m) => ({ label: `Run “${m.name}”`, click: () => void runner.run(m.id, false).catch(() => undefined) })),
         { type: "separator" },
         {
-          label: "Quit",
+          label: "Quit Keytune",
           click: () => {
             quitting = true;
             app.quit();
@@ -189,7 +189,7 @@ let trayRebuild = () => {};
 function applySettings(settings: Settings): void {
   runner.register(settings.appMacros);
   if (app.isPackaged && process.platform !== "linux") app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin, openAsHidden: true });
-  if (settings.keepInMenuBar && settings.appMacros.length > 0) setupTray();
+  if (settings.keepInMenuBar) setupTray();
   else if (tray) {
     tray.destroy();
     tray = null;
@@ -333,7 +333,7 @@ app.whenReady().then(async () => {
   }
   applySettings(storage.settings());
   const hidden = app.getLoginItemSettings().wasOpenedAsHidden;
-  if (!hidden || storage.settings().appMacros.length === 0) showWindow();
+  if (!hidden || !storage.settings().keepInMenuBar) showWindow();
   app.on("activate", () => showWindow());
 });
 

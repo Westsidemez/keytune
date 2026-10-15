@@ -43,8 +43,8 @@ export function SettingsView() {
         </Card>
 
         <Card title="App macros">
-          <Toggle label={isMac ? "Keep running in the menu bar" : "Keep running in the tray"} hint="App macros only work while the app runs. Closing the window keeps it running." checked={settings.keepInMenuBar} onChange={(v) => void updateSettings({ keepInMenuBar: v })} />
-          <Toggle label="Open at login" hint="Starts hidden, ready to run app macros." checked={settings.launchAtLogin} onChange={(v) => void updateSettings({ launchAtLogin: v })} />
+          <Toggle label={isMac ? "Keep running in the menu bar" : "Keep running in the tray"} hint="Closing the window keeps Keytune running, so app macros keep working. Open it again or quit from the menu bar icon." checked={settings.keepInMenuBar} onChange={(v) => void updateSettings({ keepInMenuBar: v })} />
+          <Toggle label="Open at login" hint="Starts hidden in the menu bar, ready to run app macros." checked={settings.launchAtLogin} onChange={(v) => void updateSettings({ launchAtLogin: v })} />
           {status && (
             <dl className="facts">
               <dt>Active app macros</dt>

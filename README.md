@@ -16,6 +16,7 @@ Keytune is a desktop app for configuring mechanical keyboards over USB. It speak
 - **Key test**: see each switch register as you press it.
 - **Profiles**: save, apply and share whole setups. Automatic backups are made every time a keyboard connects. VIA layout files import and export.
 - **Any VIA keyboard**: when you plug in a keyboard Keytune doesn't know, it downloads the keyboard's layout from VIA's library, or you can add its VIA definition file (JSON) yourself.
+- **Menu bar**: close the window and Keytune keeps running in the menu bar, so app macros keep working. Open it again or quit from the icon (turn this off in Settings).
 - **Demo keyboard**: try everything without a keyboard attached.
 
 ![Lighting gallery](docs/lighting.png)
